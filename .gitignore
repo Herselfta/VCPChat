@@ -16,3 +16,5 @@ node_modules/
 
 # Rust build artifacts
 rust_audio_engine/target/
+desktop.ini
+folder_638968653780646778.ico
