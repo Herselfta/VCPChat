@@ -13,7 +13,6 @@ require = function (id) {
 };
 
 const { app, BrowserWindow, ipcMain, nativeTheme, globalShortcut, screen, clipboard, shell, dialog, protocol, Tray, Menu } = require('electron'); // Added screen, clipboard, and shell
-// selection-hook is now managed in assistantHandlers
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs-extra'); // Using fs-extra for convenience
@@ -39,8 +38,11 @@ const themeHandlers = require('./modules/ipc/themeHandlers'); // Import theme ha
 const emoticonHandlers = require('./modules/ipc/emoticonHandlers'); // Import emoticon handlers
 const forumHandlers = require('./modules/ipc/forumHandlers'); // Import forum handlers
 const memoHandlers = require('./modules/ipc/memoHandlers'); // Import memo handlers
+const ragHandlers = require('./modules/ipc/ragHandlers'); // Import RAG handlers
 // speechRecognizer is now lazy-loaded
 const canvasHandlers = require('./modules/ipc/canvasHandlers'); // Import canvas handlers
+const desktopHandlers = require('./modules/ipc/desktopHandlers'); // Import VCPdesktop handlers
+const desktopRemoteHandlers = require('./modules/ipc/desktopRemoteHandlers'); // Import desktop remote control handlers
 // chokidar is now lazy-loaded
 
 // --- File Watcher ---
@@ -141,10 +143,12 @@ let vcpLogReconnectInterval;
 let openChildWindows = [];
 let distributedServer = null; // To hold the distributed server instance
 let translatorWindow = null; // To hold the single instance of the translator window
-let ragObserverWindow = null; // To hold the single instance of the RAG observer window
+let appSettingsManager = null;
 let networkNotesTreeCache = null; // In-memory cache for the network notes
 let cachedModels = []; // Cache for models fetched from VCP server
 const NOTES_MODULE_DIR = path.join(APP_DATA_ROOT_IN_PROJECT, 'Notemodules');
+const isRagObserverOnlyMode = process.argv.includes('--rag-observer-only');
+const isAutoOpenDesktop = process.argv.includes('--desktop-only');
 
 // --- Audio Engine Management ---
 // Now uses the Rust native audio engine instead of Python
@@ -222,7 +226,7 @@ function stopAudioEngine() {
 // --- Main Window Creation ---
 function createWindow() {
     mainWindow = new BrowserWindow({
-        width: 1200,
+        width: 1300,
         height: 800,
         minWidth: 900,
         minHeight: 600,
@@ -249,23 +253,39 @@ function createWindow() {
         }
     });
 
-    // 当主窗口关闭时，退出整个应用程序
-    // 这将触发 'will-quit' 事件，用于执行所有清理操作
+    // 当主窗口关闭时的处理逻辑：
+    // 1. macOS 上始终隐藏而非关闭
+    // 2. 当桌面窗口存在时，隐藏到托盘而非退出（偷天换日！）
+    // 3. 其他情况正常退出
     mainWindow.on('close', (event) => {
-        // On macOS, closing the window should hide it and keep the app alive.
-        // The 'activate' event will handle re-opening it.
-        if (process.platform === 'darwin' && !app.isQuitting) {
+        if (app.isQuitting) {
+            // 应用正在退出，允许关闭
+            return;
+        }
+
+        // macOS 始终隐藏
+        if (process.platform === 'darwin') {
             event.preventDefault();
             mainWindow.hide();
+            return;
         }
+
+        // Windows/Linux：如果桌面窗口存在，隐藏到托盘
+        const dw = desktopHandlers.getDesktopWindow();
+        if (dw && !dw.isDestroyed()) {
+            event.preventDefault();
+            mainWindow.hide();
+            console.log('[Main] Desktop window active — main window hidden to tray instead of closing.');
+        }
+        // 否则允许正常关闭（触发 closed 事件）
     });
 
     // This will be triggered when the app is quitting, after the window is closed.
     mainWindow.on('closed', () => {
-        // When the main window is closed, we quit the app on non-macOS platforms.
-        // This ensures that any child windows are also closed and the process terminates.
+        // When the main window is closed, we should only quit on non-macOS
+        // when there are no remaining windows (e.g. RAG Observer may still be open).
         mainWindow = null;
-        if (process.platform !== 'darwin') {
+        if (process.platform !== 'darwin' && BrowserWindow.getAllWindows().length === 0) {
             app.quit();
         }
     });
@@ -321,16 +341,60 @@ function createTray() {
 
     tray = new Tray(icon);
 
+    const toggleMainWindowVisibility = () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            if (mainWindow.isVisible()) {
+                mainWindow.hide();
+            } else {
+                if (mainWindow.isMinimized()) mainWindow.restore();
+                mainWindow.show();
+                mainWindow.focus();
+            }
+            return true;
+        }
+        return false;
+    };
+
+    const toggleRagObserverVisibility = async () => {
+        const ragObserverWindow = ragHandlers.getRagObserverWindow();
+        const ragOverlayWindow = ragHandlers.getRagOverlayWindow();
+        if (ragObserverWindow && !ragObserverWindow.isDestroyed()) {
+            if (ragObserverWindow.isVisible()) {
+                ragObserverWindow.hide();
+                if (ragOverlayWindow && !ragOverlayWindow.isDestroyed()) {
+                    ragOverlayWindow.hide();
+                }
+            } else {
+                if (ragObserverWindow.isMinimized()) ragObserverWindow.restore();
+                ragObserverWindow.show();
+                ragObserverWindow.focus();
+            }
+            return true;
+        }
+
+        await ragHandlers.openRagObserverWindow();
+        return true;
+    };
+
+    const handleTrayPrimaryAction = async () => {
+        if (toggleMainWindowVisibility()) return;
+        await toggleRagObserverVisibility();
+    };
+
     const contextMenu = Menu.buildFromTemplate([
         {
-            label: '显示/隐藏',
+            label: '显示/隐藏主窗口',
             click: () => {
-                // 修复 TypeError: Cannot read properties of null (reading 'isVisible')
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show();
-                }
+                toggleMainWindowVisibility();
             }
         },
+        {
+            label: '显示/隐藏信息流监听器',
+            click: () => {
+                void toggleRagObserverVisibility();
+            }
+        },
+        { type: 'separator' },
         {
             label: '退出',
             click: () => {
@@ -345,9 +409,7 @@ function createTray() {
     if (process.platform === 'darwin') {
         // macOS: 左键点击 (tray.on('click')) 负责显示/隐藏窗口
         tray.on('click', () => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show();
-            }
+            void handleTrayPrimaryAction();
         });
 
         // macOS: 右键点击 (tray.on('right-click')) 负责显示菜单
@@ -360,12 +422,11 @@ function createTray() {
         // Windows/Linux: 默认行为。
         tray.setContextMenu(contextMenu);
         tray.on('click', () => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show();
-            }
+            void handleTrayPrimaryAction();
         });
     }
 }
+
 
 // --- App Lifecycle ---
 const gotTheLock = app.requestSingleInstanceLock();
@@ -373,11 +434,39 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
     app.quit();
 } else {
-    app.on('second-instance', (event, commandLine, workingDirectory) => {
-        // 有人试图运行第二个实例，我们应该聚焦于我们的窗口
+    app.on('second-instance', async (event, commandLine, workingDirectory) => {
+        const wantsRagOnly = commandLine.includes('--rag-observer-only');
+        const wantsDesktop = commandLine.includes('--desktop-only');
+
+        // 如果第二实例请求的是 RAG 独立模式，则直接打开/聚焦 RAG 窗口
+        if (wantsRagOnly) {
+            await ragHandlers.openRagObserverWindow();
+            return;
+        }
+
+        // 如果第二实例带 --desktop-only 参数，打开/聚焦桌面窗口
+        if (wantsDesktop) {
+            await desktopHandlers.openDesktopWindow();
+            // 同时确保主窗口也显示出来
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                if (!mainWindow.isVisible()) mainWindow.show();
+                mainWindow.focus();
+            }
+            return;
+        }
+
+        // 默认聚焦主窗口
         if (mainWindow && !mainWindow.isDestroyed()) {
             if (mainWindow.isMinimized()) mainWindow.restore();
             mainWindow.focus();
+            return;
+        }
+
+        const ragObserverWindow = ragHandlers.getRagObserverWindow();
+        if (ragObserverWindow && !ragObserverWindow.isDestroyed()) {
+            if (ragObserverWindow.isMinimized()) ragObserverWindow.restore();
+            if (!ragObserverWindow.isVisible()) ragObserverWindow.show();
+            ragObserverWindow.focus();
         }
     });
 
@@ -424,7 +513,7 @@ if (!gotTheLock) {
 
         const AppSettingsManager = require('./modules/utils/appSettingsManager');
         const AgentConfigManager = require('./modules/utils/agentConfigManager');
-        const appSettingsManager = new AppSettingsManager(SETTINGS_FILE);
+        appSettingsManager = new AppSettingsManager(SETTINGS_FILE);
         const agentConfigManager = new AgentConfigManager(AGENT_DIR);
 
         appSettingsManager.startCleanupTimer();
@@ -432,6 +521,24 @@ if (!gotTheLock) {
         agentConfigManager.startCleanupTimer(); // Start agent config cleanup
 
         settingsHandlers.initialize({ SETTINGS_FILE, USER_AVATAR_FILE, AGENT_DIR, settingsManager: appSettingsManager, agentConfigManager }); // Initialize settings handlers
+        ragHandlers.initialize({ mainWindow, openChildWindows, settingsManager: appSettingsManager, SETTINGS_FILE });
+
+        // RAG 独立模式：不创建主窗口，仅初始化 RAG 所需 IPC 并直接打开 RAG 窗口
+        if (isRagObserverOnlyMode) {
+            console.log('[Main] Starting in RAG observer only mode.');
+            windowHandlers.initialize(mainWindow, openChildWindows);
+            themeHandlers.initialize({ mainWindow, openChildWindows, projectRoot: PROJECT_ROOT, APP_DATA_ROOT_IN_PROJECT, settingsManager: appSettingsManager });
+            ipcMain.handle('get-platform', () => process.platform);
+
+            // 关键：独立模式也必须创建系统托盘，否则"最小化到托盘"后无法召回窗口。
+            createTray();
+
+            await ragHandlers.openRagObserverWindow();
+            return;
+        }
+
+        // 注意：原 desktop-only 模式已移除。--desktop-only 参数现在仅作为
+        // "启动后自动打开桌面窗口"的标志，所有 IPC 始终完整初始化。
 
         // Function to fetch and cache models from the VCP server
         async function fetchAndCacheModels() {
@@ -764,71 +871,7 @@ if (!gotTheLock) {
             });
         });
 
-        // 新增：处理打开RAG Observer窗口的请求
-        ipcMain.handle('open-rag-observer-window', async () => {
-            // 检查窗口是否已存在，如果存在则聚焦
-            if (ragObserverWindow && !ragObserverWindow.isDestroyed()) {
-                if (!ragObserverWindow.isVisible()) {
-                    ragObserverWindow.show();
-                }
-                ragObserverWindow.focus();
-                return;
-            }
-
-            ragObserverWindow = new BrowserWindow({
-                width: 500,
-                height: 900,
-                minWidth: 300,
-                minHeight: 600,
-                title: 'VCP - 信息流监听器',
-                frame: false, // 移除原生窗口框架
-                ...(process.platform === 'darwin' ? {} : { titleBarStyle: 'hidden' }),
-                webPreferences: {
-                    preload: path.join(__dirname, 'preload.js'),
-                    contextIsolation: true,
-                    nodeIntegration: false,
-                },
-                icon: path.join(__dirname, 'assets', 'icon.png'),
-                show: false
-            });
-
-            let settings = {};
-            try {
-                const AppSettingsManager = require('./modules/utils/appSettingsManager');
-                const sm = new AppSettingsManager(SETTINGS_FILE);
-                settings = await sm.readSettings();
-            } catch (readError) {
-                console.error('Failed to read settings file for RAG observer window:', readError);
-            }
-
-            const vcpLogUrl = settings.vcpLogUrl || '';
-            const vcpLogKey = settings.vcpLogKey || '';
-            const currentThemeMode = settings.currentThemeMode || 'dark';
-
-            // 通过URL查询参数传递配置
-            const observerUrl = `file://${path.join(__dirname, 'RAGmodules', 'RAG_Observer.html')}?vcpLogUrl=${encodeURIComponent(vcpLogUrl)}&vcpLogKey=${encodeURIComponent(vcpLogKey)}&currentThemeMode=${encodeURIComponent(currentThemeMode)}`;
-
-            ragObserverWindow.loadURL(observerUrl);
-            ragObserverWindow.setMenu(null);
-
-            ragObserverWindow.once('ready-to-show', () => {
-                ragObserverWindow.show();
-            });
-
-            openChildWindows.push(ragObserverWindow);
-
-            ragObserverWindow.on('close', (event) => {
-                if (process.platform === 'darwin' && !app.isQuitting) {
-                    event.preventDefault();
-                    ragObserverWindow.hide();
-                }
-            });
-
-            ragObserverWindow.on('closed', () => {
-                openChildWindows = openChildWindows.filter(win => win !== ragObserverWindow);
-                ragObserverWindow = null;
-            });
-        });
+        // open-rag-observer-window handler is registered once above and reuses openRagObserverWindow()
 
         windowHandlers.initialize(mainWindow, openChildWindows);
         forumHandlers.initialize({ USER_DATA_DIR }); // Initialize forum handlers
@@ -905,6 +948,8 @@ if (!gotTheLock) {
         emoticonHandlers.initialize({ SETTINGS_FILE, APP_DATA_ROOT_IN_PROJECT });
         emoticonHandlers.setupEmoticonHandlers();
         canvasHandlers.initialize({ mainWindow, openChildWindows, CANVAS_CACHE_DIR });
+        desktopHandlers.initialize({ mainWindow, openChildWindows, settingsManager: appSettingsManager });
+        desktopRemoteHandlers.initialize({ mainWindow });
         promptHandlers.initialize({ AGENT_DIR, APP_DATA_ROOT_IN_PROJECT });
 
         ipcMain.on('minimize-to-tray', () => {
@@ -928,8 +973,9 @@ if (!gotTheLock) {
                         rendererProcess: mainWindow.webContents, // Pass the renderer process object
                         handleMusicControl: musicHandlers.handleMusicControl, // Inject the music control handler
                         handleDiceControl: diceHandlers.handleDiceControl, // Inject the dice control handler
-                        handleCanvasControl: handleCanvasControl, // Inject the canvas control handler
-                        handleFlowlockControl: handleFlowlockControl // Inject the flowlock control handler
+                        handleCanvasControl: desktopRemoteHandlers.handleCanvasControl, // Inject the canvas control handler
+                        handleFlowlockControl: desktopRemoteHandlers.handleFlowlockControl, // Inject the flowlock control handler
+                        handleDesktopRemoteControl: desktopRemoteHandlers.handleDesktopRemoteControl // Inject the desktop remote control handler
                     };
                     distributedServer = new DistributedServer(config);
                     distributedServer.initialize();
@@ -978,6 +1024,17 @@ if (!gotTheLock) {
         ipcMain.handle('get-platform', () => {
             return process.platform;
         });
+
+        // --- 自动打开桌面窗口 ---
+        // 当使用 --desktop-only 参数启动时，在所有 IPC 初始化完成后自动打开桌面窗口
+        if (isAutoOpenDesktop) {
+            console.log('[Main] --desktop-only flag detected. Auto-opening desktop window after full initialization.');
+            // 延迟打开，确保主窗口已完全就绪
+            setTimeout(async () => {
+                await desktopHandlers.openDesktopWindow();
+                console.log('[Main] Desktop window auto-opened.');
+            }, 1000);
+        }
     });
 
     // --- Python Execution IPC Handler ---
@@ -1195,6 +1252,7 @@ if (!gotTheLock) {
             console.warn('VCPLog WebSocket 未连接或未就绪，无法发送消息:', data);
         }
     });
+
 }
 // --- Voice Chat IPC Handler ---
 ipcMain.on('open-voice-chat-window', (event, { agentId }) => {
@@ -1216,12 +1274,15 @@ ipcMain.on('open-voice-chat-window', (event, { agentId }) => {
         show: false,
     });
 
+    const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+    voiceChatWindow.webContents.once('did-finish-load', () => {
+        voiceChatWindow.webContents.send('voice-chat-data', { agentId, theme });
+    });
+    
     voiceChatWindow.loadFile(path.join(__dirname, 'Voicechatmodules/voicechat.html'));
 
     voiceChatWindow.once('ready-to-show', () => {
-        const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
         voiceChatWindow.show();
-        voiceChatWindow.webContents.send('voice-chat-data', { agentId, theme });
     });
 
     openChildWindows.push(voiceChatWindow);
@@ -1286,24 +1347,6 @@ ipcMain.handle('export-topic-as-markdown', async (event, exportData) => {
     }
 });
 
-// --- Canvas Control Handler (for Distributed Server) ---
-async function handleCanvasControl(filePath) {
-    try {
-        if (!filePath) {
-            throw new Error('No filePath provided for canvas control.');
-        }
-
-        // The updated createCanvasWindow now handles both opening the window
-        // and loading the specific file, or focusing and loading if already open.
-        await canvasHandlers.createCanvasWindow(filePath);
-
-        return { status: 'success', message: 'Canvas window command processed.' };
-    } catch (error) {
-        console.error('[Main] handleCanvasControl error:', error);
-        return { status: 'error', message: error.message };
-    }
-}
-
 // --- Group Chat Interrupt Handler ---
 ipcMain.handle('interrupt-group-request', (event, messageId) => {
     console.log(`[Main] Received interrupt-group-request for messageId: ${messageId}`);
@@ -1315,111 +1358,6 @@ ipcMain.handle('interrupt-group-request', (event, messageId) => {
     }
 });
 
-// --- Flowlock Control Handler (for Distributed Server) ---
-async function handleFlowlockControl(commandPayload) {
-    try {
-        const { command, agentId, topicId, prompt, promptSource, target, oldText, newText } = commandPayload;
-
-        console.log(`[Main] handleFlowlockControl received command: ${command}`, commandPayload);
-
-        if (!mainWindow || mainWindow.isDestroyed()) {
-            throw new Error('Main window is not available.');
-        }
-
-        // For 'get' and 'status' commands, we need to wait for a response from renderer
-        if (command === 'get' || command === 'status') {
-            return new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    reject(new Error(`${command === 'get' ? '获取输入框内容' : '获取心流锁状态'}超时`));
-                }, 5000); // 5 second timeout
-
-                // Set up one-time listener for the response
-                const responseHandler = (event, responseData) => {
-                    clearTimeout(timeout);
-                    ipcMain.removeListener('flowlock-response', responseHandler);
-
-                    if (responseData.success) {
-                        if (command === 'get') {
-                            resolve({
-                                status: 'success',
-                                message: `输入框当前内容为: "${responseData.content}"`,
-                                content: responseData.content
-                            });
-                        } else if (command === 'status') {
-                            const statusInfo = responseData.status;
-                            const statusText = statusInfo.isActive
-                                ? `心流锁已启用 (Agent: ${statusInfo.agentId}, Topic: ${statusInfo.topicId}, 处理中: ${statusInfo.isProcessing ? '是' : '否'})`
-                                : '心流锁未启用';
-                            resolve({
-                                status: 'success',
-                                message: statusText,
-                                flowlockStatus: statusInfo
-                            });
-                        }
-                    } else {
-                        reject(new Error(responseData.error || `${command === 'get' ? '获取输入框内容' : '获取心流锁状态'}失败`));
-                    }
-                };
-
-                ipcMain.on('flowlock-response', responseHandler);
-
-                // Send command to renderer
-                mainWindow.webContents.send('flowlock-command', {
-                    command,
-                    agentId,
-                    topicId,
-                    prompt,
-                    promptSource,
-                    target,
-                    oldText,
-                    newText
-                });
-            });
-        }
-
-        // For other commands, send and return immediately
-        mainWindow.webContents.send('flowlock-command', {
-            command,
-            agentId,
-            topicId,
-            prompt,
-            promptSource,
-            target,
-            oldText,
-            newText
-        });
-
-        // Build natural language response for AI
-        let naturalResponse = '';
-        switch (command) {
-            case 'start':
-                naturalResponse = `已为 Agent "${agentId}" 的话题 "${topicId}" 启动心流锁。`;
-                break;
-            case 'stop':
-                naturalResponse = `已停止心流锁。`;
-                break;
-            case 'promptee':
-                naturalResponse = `已设置下次续写提示词为: "${prompt}"`;
-                break;
-            case 'prompter':
-                naturalResponse = `已从来源 "${promptSource}" 获取提示词。`;
-                break;
-            case 'clear':
-                naturalResponse = `已清空输入框中的所有提示词。`;
-                break;
-            case 'remove':
-                naturalResponse = `已从输入框中移除: "${target}"`;
-                break;
-            case 'edit':
-                naturalResponse = `已将 "${oldText}" 编辑为 "${newText}"`;
-                break;
-            default:
-                naturalResponse = `心流锁命令 "${command}" 已执行。`;
-        }
-
-        return { status: 'success', message: naturalResponse };
-    } catch (error) {
-        console.error('[Main] handleFlowlockControl error:', error);
-        return { status: 'error', message: error.message };
-    }
-}
+// --- Desktop Remote Control, Canvas Control, and Flowlock Control handlers ---
+// These have been modularized into modules/ipc/desktopRemoteHandlers.js
+// They are injected into the DistributedServer via desktopRemoteHandlers.handleDesktopRemoteControl, etc.

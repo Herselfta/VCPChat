@@ -1,0 +1,39 @@
+{
+  "name": "DesktopRemote",
+  "displayName": "桌面远程控制器",
+  "pluginType": "synchronous",
+  "version": "1.3.0",
+  "description": "远程控制VCPdesktop桌面画布，支持推送壁纸、感知查询桌面状态、查询Dock应用列表、查看挂件源码、创建新挂件。",
+  "author": "VCPToolBox",
+  "license": "MIT",
+  "entryPoint": {
+    "command": "node desktop-remote.js"
+  },
+  "communication": {
+    "protocol": "stdio"
+  },
+  "capabilities": {
+    "invocationCommands": [
+      {
+        "command": "SetWallpaper",
+        "description": "功能: 推送壁纸到用户的VCPdesktop桌面。支持多种壁纸来源：\n1. 直接URL（http/https）：推送网络图片或视频作为壁纸。\n2. 本地文件URL（file:///...）：推送本地图片、视频或HTML文件作为壁纸。\n3. HTML内容：直接传入一段HTML代码，系统会将其保存为HTML文件并作为动态壁纸加载（适合粒子效果、shader动画等）。\n\n壁纸类型会根据文件扩展名或内容自动检测：图片(jpg/png/gif/webp/svg)、视频(mp4/webm)、HTML动态壁纸(html/htm)。\n\n参数:\n- wallpaperSource (字符串, 必需): 壁纸来源。可以是：\n  - HTTP/HTTPS URL (如 https://example.com/bg.jpg)\n  - 本地文件 file:// URL (如 file:///C:/wallpapers/bg.png)\n  - 完整的HTML代码（以 <!DOCTYPE 或 <html 开头时会被识别为HTML内容）\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」DesktopRemote「末」,\ncommand:「始」SetWallpaper「末」,\nwallpaperSource:「始」https://example.com/beautiful-landscape.jpg「末」\n<<<[END_TOOL_REQUEST]>>>\n\n创建HTML动态壁纸示例:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」DesktopRemote「末」,\ncommand:「始」SetWallpaper「末」,\nwallpaperSource:「始」<!DOCTYPE html><html><head><style>body{margin:0;overflow:hidden;background:#000}canvas{display:block}</style></head><body><canvas id=\"c\"></canvas><script>/* 粒子动画代码 */</script></body></html>「末」\n<<<[END_TOOL_REQUEST]>>>"
+      },
+      {
+        "command": "QueryDesktop",
+        "description": "功能: 感知查询当前VCPdesktop桌面上的所有挂件(widget)和图标(shortcut icon)信息。\n返回内容包括：\n- widgets: 桌面上所有活跃挂件的ID列表。如果挂件已被收藏，还会显示收藏名称和对应的持久化目录路径（可配合FileOperator插件读写维护收藏的HTML内容）。\n- icons: 桌面上所有快捷方式图标的名称列表。\n\n此命令无需额外参数。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」DesktopRemote「末」,\ncommand:「始」QueryDesktop「末」\n<<<[END_TOOL_REQUEST]>>>"
+      },
+      {
+        "command": "QueryDock",
+        "description": "功能: 查询VCPdesktop的Dock栏完整应用列表，了解所有可用的应用、工具和启动方式。\n返回内容包括：\n- Dock快捷方式: 用户导入的Windows桌面快捷方式列表（名称、类型、可见性、启动代码）\n- VChat内部应用: 12个硬编码的VChat核心应用（如音乐播放器、笔记、翻译等），始终可用\n- Windows系统工具: 5个系统工具快捷入口（显示设置、控制面板等），始终可用\n- 内置桌面挂件: 天气挂件、音乐播放条、应用托盘等内置组件\n\n每个应用都附带对应的启动代码示例，可在Widget脚本中直接使用 `window.VCPDesktop.dock.launch(item)` 调用。\n\n此命令无需额外参数。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」DesktopRemote「末」,\ncommand:「始」QueryDock「末」\n<<<[END_TOOL_REQUEST]>>>"
+      },
+      {
+        "command": "ViewWidgetSource",
+        "description": "功能: 查看桌面上指定挂件(widget)的HTML源码内容。通过提供挂件ID，可以获取该挂件当前正在渲染的完整HTML代码。这对于理解挂件的结构、调试问题或基于现有挂件进行修改非常有用。\n\n建议先调用 QueryDesktop 获取挂件ID列表，再使用此命令查看特定挂件的源码。\n\n参数:\n- widgetId (字符串, 必需): 要查看源码的挂件ID。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」DesktopRemote「末」,\ncommand:「始」ViewWidgetSource「末」,\nwidgetId:「始」widget-abc123「末」\n<<<[END_TOOL_REQUEST]>>>"
+      },
+      {
+        "command": "CreateWidget",
+        "description": "功能: 在用户的VCPdesktop桌面上创建一个新的挂件(widget)。你可以传入完整的HTML代码，系统会在桌面画布上渲染该挂件。支持指定初始位置、尺寸，并可选择是否自动收藏。\n\n这是最灵活的桌面交互方式，适合创建：天气挂件、时钟、待办事项、数据可视化面板、小游戏、动画效果等任何基于HTML的交互式内容。\n\n挂件运行在Shadow DOM沙箱中，脚本通过安全包装执行。挂件内可以使用以下API：\n- `document.querySelector/getElementById` 等 DOM 操作（作用域限定在挂件内部）\n- `vcpAPI.fetch(endpoint, opts)` - 调用VCP后端API\n- `vcpAPI.weather()` - 获取天气数据\n- `musicAPI.play/pause/getState/setVolume/seek` - 控制音乐播放\n\n参数:\n- htmlContent (字符串, 必需): 挂件的完整HTML代码。可以包含 <style> 和 <script> 标签。\n- x (数字, 可选): 挂件左上角的X坐标（像素），默认100。\n- y (数字, 可选): 挂件左上角的Y坐标（像素），默认100。\n- width (数字, 可选): 挂件初始宽度（像素），默认320。挂件会根据内容自动调整。\n- height (数字, 可选): 挂件初始高度（像素），默认200。挂件会根据内容自动调整。\n- widgetId (字符串, 可选): 自定义挂件ID。默认自动生成。\n- autoSave (布尔, 可选): 是否自动将挂件收藏到侧栏，默认false。\n- saveName (字符串, 可选): 收藏名称（仅当autoSave为true时有效）。\n- scriptFiles (字符串, 可选): 外部JS脚本源码。当挂件的JavaScript逻辑较复杂时，可以将JS代码写在这个参数里，系统会自动将其保存为 app.js 文件。htmlContent中应通过 <script src=\"app.js\"></script> 来引用它（如果你忘了加这个标签，系统也会自动追加）。使用此参数时会自动启用autoSave（因为外部文件需要持久化存储）。这样可以避免把大段JS内联在HTML中，使代码结构更清晰。\n\n调用示例 - 创建一个简单时钟挂件（内联JS）:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」DesktopRemote「末」,\ncommand:「始」CreateWidget「末」,\nhtmlContent:「始」<div style=\"font-family:monospace;font-size:48px;color:#0ff;text-align:center;padding:20px;background:#111;border-radius:12px\"><span id=\"clock\">00:00:00</span></div><script>setInterval(()=>{const d=new Date();document.getElementById('clock').textContent=d.toLocaleTimeString()},1000)</script>「末」,\nx:「始」200「末」,\ny:「始」150「末」\n<<<[END_TOOL_REQUEST]>>>\n\n调用示例 - 创建并自动收藏:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」DesktopRemote「末」,\ncommand:「始」CreateWidget「末」,\nhtmlContent:「始」<div style=\"padding:16px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border-radius:12px;font-size:18px\">Hello Desktop!</div>「末」,\nautoSave:「始」true「末」,\nsaveName:「始」问候挂件「末」\n<<<[END_TOOL_REQUEST]>>>\n\n调用示例 - 使用外部app.js创建复杂挂件（推荐用于复杂JS逻辑）:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」DesktopRemote「末」,\ncommand:「始」CreateWidget「末」,\nhtmlContent:「始」<div id=\"app\"><canvas id=\"canvas\" width=\"300\" height=\"200\"></canvas></div><style>#canvas{border:1px solid #333;border-radius:8px}</style><script src=\"app.js\"></script>「末」,\nscriptFiles:「始」const canvas = document.getElementById('canvas');\nconst ctx = canvas.getContext('2d');\nctx.fillStyle = '#0ff';\nctx.fillRect(10, 10, 100, 100);\nctx.fillStyle = '#f0f';\nctx.fillRect(50, 50, 100, 100);「末」,\nsaveName:「始」画布挂件「末」\n<<<[END_TOOL_REQUEST]>>>"
+      }
+    ]
+  }
+}

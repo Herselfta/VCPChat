@@ -1,0 +1,32 @@
+/* ============================================================
+ * VCPdesktop - 样式入口文件
+ * 
+ * 通过 @import 引入模块化的样式文件。
+ * 加载顺序很重要：基础 → 组件 → 主题覆盖
+ * 
+ * 模块说明：
+ *   base.css         — 全局重置、壁纸层、标题栏、画布
+ *   widgets.css      — 挂件容器、施工态、动画
+ *   shortcuts.css    — 桌面快捷方式图标
+ *   ui-components.css — 状态指示器、右键菜单、收藏模态窗
+ *   sidebar.css      — 侧栏面板、分页、收藏/预设卡片
+ *   dock.css         — Dock 栏、应用抽屉、排序指示器
+ *   icon-picker.css  — 图标选择器面板
+ *   settings.css     — 全局设置面板、壁纸配置
+ *   theme-overrides.css — 浅色主题适配（必须最后加载）
+ * ============================================================ */
+
+/* 核心基础 */
+@import url('./css/base.css');
+@import url('./css/widgets.css');
+@import url('./css/shortcuts.css');
+
+/* UI 组件 */
+@import url('./css/ui-components.css');
+@import url('./css/sidebar.css');
+@import url('./css/dock.css');
+@import url('./css/icon-picker.css');
+@import url('./css/settings.css');
+
+/* 主题覆盖（必须最后加载，确保优先级正确） */
+@import url('./css/theme-overrides.css');
