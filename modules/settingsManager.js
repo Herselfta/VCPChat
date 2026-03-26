@@ -57,11 +57,11 @@ const settingsManager = (() => {
     let topicSummaryModelInput, openTopicSummaryModelSelectBtn; // New elements for topic summary model
     let agentTtsVoicePrimarySelect, agentTtsRegexPrimaryInput, agentTtsVoiceSecondarySelect, agentTtsRegexSecondaryInput, refreshTtsModelsBtn, agentTtsSpeedSlider, ttsSpeedValueSpan;
     let stripRegexListContainer;
-    
+
     // --- New Regex Modal Elements ---
     let regexRuleModal, regexRuleForm, editingRegexRuleId, regexRuleTitle, regexRuleFind, regexRuleReplace;
     let regexRuleMinDepth, regexRuleMaxDepth, cancelRegexRuleBtn, closeRegexRuleModalBtn;
-    
+
     // A private variable to hold the regex rules for the currently edited agent
     let currentAgentRegexes = [];
     let currentModelSelectCallback = null;
@@ -72,7 +72,7 @@ const settingsManager = (() => {
      */
     function displaySettingsForItem() {
         const currentSelectedItem = refs.currentSelectedItemRef.get();
-        
+
         const agentSettingsExists = agentSettingsContainer && typeof agentSettingsContainer.style !== 'undefined';
         const groupSettingsExists = groupSettingsContainer && typeof groupSettingsContainer.style !== 'undefined';
 
@@ -124,10 +124,10 @@ const settingsManager = (() => {
             selectItemPromptForSettings.style.display = 'block';
             return;
         }
-        
+
         editingAgentIdInput.value = agentId;
         agentNameInput.value = agentConfig.name || agentId;
-        
+
         // Initialize PromptManager
         const systemPromptContainer = document.getElementById('systemPromptContainer');
         if (systemPromptContainer && window.PromptManager) {
@@ -135,7 +135,7 @@ const settingsManager = (() => {
                 // Save current state before switching
                 await promptManager.saveCurrentModeData();
             }
-            
+
             promptManager = new window.PromptManager();
             promptManager.init({
                 agentId: agentId,
@@ -144,7 +144,7 @@ const settingsManager = (() => {
                 electronAPI: electronAPI
             });
         }
-        
+
         agentModelInput.value = agentConfig.model || '';
         agentTemperatureInput.value = agentConfig.temperature !== undefined ? agentConfig.temperature : 0.7;
         agentContextTokenLimitInput.value = agentConfig.contextTokenLimit !== undefined ? agentConfig.contextTokenLimit : 4000;
@@ -155,10 +155,10 @@ const settingsManager = (() => {
         const streamOutput = agentConfig.streamOutput !== undefined ? agentConfig.streamOutput : true;
         document.getElementById('agentStreamOutputTrue').checked = streamOutput === true || String(streamOutput) === 'true';
         document.getElementById('agentStreamOutputFalse').checked = streamOutput === false || String(streamOutput) === 'false';
-        
+
         // 获取头像包装器元素
         const avatarWrapper = agentAvatarPreview?.closest('.agent-avatar-wrapper');
-        
+
         if (agentConfig.avatarUrl) {
             agentAvatarPreview.src = `${agentConfig.avatarUrl}${agentConfig.avatarUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
             agentAvatarPreview.style.display = 'block';
@@ -177,57 +177,57 @@ const settingsManager = (() => {
         }
         agentAvatarInput.value = '';
         mainRendererFunctions.setCroppedFile('agent', null);
-        
+
         // Populate custom style settings
         agentAvatarBorderColorInput.value = agentConfig.avatarBorderColor || '#3d5a80';
         agentAvatarBorderColorTextInput.value = agentConfig.avatarBorderColor || '#3d5a80';
         agentNameTextColorInput.value = agentConfig.nameTextColor || '#ffffff';
         agentNameTextColorTextInput.value = agentConfig.nameTextColor || '#ffffff';
         agentCustomCssInput.value = agentConfig.customCss || '';
-        
+
         // Load card CSS
         const agentCardCssInput = document.getElementById('agentCardCss');
         if (agentCardCssInput) {
             agentCardCssInput.value = agentConfig.cardCss || '';
         }
-        
+
         // Load chat CSS
         const agentChatCssInput = document.getElementById('agentChatCss');
         if (agentChatCssInput) {
             agentChatCssInput.value = agentConfig.chatCss || '';
         }
-        
+
         // Apply card CSS to the identity container in settings page
         applyCardCssToIdentityContainer(agentConfig.cardCss || '');
-        
+
         // Load disableCustomColors setting
         const disableCustomColorsCheckbox = document.getElementById('disableCustomColors');
         if (disableCustomColorsCheckbox) {
             disableCustomColorsCheckbox.checked = agentConfig.disableCustomColors || false;
         }
-        
+
         // Load useThemeColorsInChat setting
         const useThemeColorsInChatCheckbox = document.getElementById('useThemeColorsInChat');
         if (useThemeColorsInChatCheckbox) {
             useThemeColorsInChatCheckbox.checked = agentConfig.useThemeColorsInChat || false;
         }
-        
+
         // Restore collapse states
         restoreCollapseStates(agentConfig);
-        
+
         // Populate bilingual TTS settings
         populateTtsModels(agentConfig.ttsVoicePrimary, agentConfig.ttsVoiceSecondary);
-        
+
         agentTtsRegexPrimaryInput.value = agentConfig.ttsRegexPrimary || '';
         agentTtsRegexSecondaryInput.value = agentConfig.ttsRegexSecondary || '';
 
         agentTtsSpeedSlider.value = agentConfig.ttsSpeed !== undefined ? agentConfig.ttsSpeed : 1.0;
-    ttsSpeedValueSpan.textContent = parseFloat(agentTtsSpeedSlider.value).toFixed(1);
-    
-    // Load and render regex rules
-    currentAgentRegexes = JSON.parse(JSON.stringify(agentConfig.stripRegexes || [])); // Deep copy
-    renderRegexList();
-}
+        ttsSpeedValueSpan.textContent = parseFloat(agentTtsSpeedSlider.value).toFixed(1);
+
+        // Load and render regex rules
+        currentAgentRegexes = JSON.parse(JSON.stringify(agentConfig.stripRegexes || [])); // Deep copy
+        renderRegexList();
+    }
 
     /**
      * Handles the submission of the agent settings form, saving the changes.
@@ -243,7 +243,7 @@ const settingsManager = (() => {
             const currentPrompt = await promptManager.getCurrentSystemPrompt();
             systemPromptData.systemPrompt = currentPrompt; // Keep for compatibility
         }
-        
+
         const newConfig = {
             name: agentNameInput.value.trim(),
             ...systemPromptData,
@@ -269,12 +269,12 @@ const settingsManager = (() => {
             useThemeColorsInChat: document.getElementById('useThemeColorsInChat')?.checked || false,
             uiCollapseStates: getCurrentCollapseStates()
         };
-     
+
         if (!newConfig.name) {
             uiHelper.showToastNotification("Agent名称不能为空！", 'error');
             return;
         }
-     
+
         const croppedFile = mainRendererFunctions.getCroppedFile('agent');
         if (croppedFile) {
             try {
@@ -284,18 +284,18 @@ const settingsManager = (() => {
                     type: croppedFile.type,
                     buffer: arrayBuffer
                 });
-     
+
                 if (avatarResult.error) {
                     uiHelper.showToastNotification(`保存Agent头像失败: ${avatarResult.error}`, 'error');
                 } else {
                     // 只在成功保存真实头像文件后才提取颜色
                     if (avatarResult.needsColorExtraction && avatarResult.avatarUrl && electronAPI.saveAvatarColor) {
-                         uiHelper.getAverageColorFromAvatar(avatarResult.avatarUrl, (avgColor) => {
+                        uiHelper.getAverageColorFromAvatar(avatarResult.avatarUrl, (avgColor) => {
                             if (avgColor) {
                                 electronAPI.saveAvatarColor({ type: 'agent', id: agentId, color: avgColor })
                                     .then((saveColorResult) => {
                                         if (saveColorResult && saveColorResult.success) {
-                                            if(refs.currentSelectedItemRef.get().id === agentId && refs.currentSelectedItemRef.get().type === 'agent' && window.messageRenderer) {
+                                            if (refs.currentSelectedItemRef.get().id === agentId && refs.currentSelectedItemRef.get().type === 'agent' && window.messageRenderer) {
                                                 window.messageRenderer.setCurrentItemAvatarColor(avgColor);
                                             }
                                         } else {
@@ -314,33 +314,46 @@ const settingsManager = (() => {
                 uiHelper.showToastNotification(`读取Agent头像文件失败: ${readError.message}`, 'error');
             }
         }
-     
+
         const result = await electronAPI.saveAgentConfig(agentId, newConfig);
         const saveButton = agentSettingsForm.querySelector('button[type="submit"]');
-     
+
         if (result.success) {
             if (saveButton) uiHelper.showSaveFeedback(saveButton, true, '已保存!', '保存 Agent 设置');
             await window.itemListManager.loadItems();
-            
+
             const currentSelectedItem = refs.currentSelectedItemRef.get();
             if (currentSelectedItem.id === agentId && currentSelectedItem.type === 'agent') {
                 const updatedAgentConfig = await electronAPI.getAgentConfig(agentId);
-                currentSelectedItem.name = newConfig.name;
-                if (currentSelectedItem.config) {
-                    currentSelectedItem.config = updatedAgentConfig;
-                } else {
-                    Object.assign(currentSelectedItem, updatedAgentConfig);
-                }
                 
-                // Update other UI parts via callbacks or direct calls if modules are passed in
-                if (mainRendererFunctions.updateChatHeader) {
-                    mainRendererFunctions.updateChatHeader(`与 ${newConfig.name} 聊天中`);
+                // ⚠️ 检查是否返回错误对象
+                if (updatedAgentConfig && updatedAgentConfig.error) {
+                    console.error(`[SettingsManager] Failed to get updated agent config:`, updatedAgentConfig.error);
+                    uiHelper.showToastNotification(`无法刷新Agent配置: ${updatedAgentConfig.error}`, 'warning');
+                    // 仍然更新名称，但不更新其他可能缺失的属性
+                    currentSelectedItem.name = newConfig.name;
+                    selectedItemNameForSettingsSpan.textContent = newConfig.name;
+                    if (mainRendererFunctions.updateChatHeader) {
+                        mainRendererFunctions.updateChatHeader(`与 ${newConfig.name} 聊天中`);
+                    }
+                } else if (updatedAgentConfig) {
+                    currentSelectedItem.name = newConfig.name;
+                    if (currentSelectedItem.config) {
+                        currentSelectedItem.config = updatedAgentConfig;
+                    } else {
+                        Object.assign(currentSelectedItem, updatedAgentConfig);
+                    }
+
+                    // Update other UI parts via callbacks or direct calls if modules are passed in
+                    if (mainRendererFunctions.updateChatHeader) {
+                        mainRendererFunctions.updateChatHeader(`与 ${newConfig.name} 聊天中`);
+                    }
+                    if (window.messageRenderer) {
+                        window.messageRenderer.setCurrentItemAvatar(updatedAgentConfig.avatarUrl);
+                        window.messageRenderer.setCurrentItemAvatarColor(updatedAgentConfig.avatarCalculatedColor || null);
+                    }
+                    selectedItemNameForSettingsSpan.textContent = newConfig.name;
                 }
-                if (window.messageRenderer) {
-                    window.messageRenderer.setCurrentItemAvatar(updatedAgentConfig.avatarUrl);
-                    window.messageRenderer.setCurrentItemAvatarColor(updatedAgentConfig.avatarCalculatedColor || null);
-                }
-                selectedItemNameForSettingsSpan.textContent = newConfig.name;
             }
         } else {
             if (saveButton) uiHelper.showSaveFeedback(saveButton, false, '保存失败', '保存 Agent 设置');
@@ -374,7 +387,7 @@ const settingsManager = (() => {
                 refs.currentSelectedItemRef.set({ id: null, type: null, name: null, avatarUrl: null, config: null });
                 refs.currentTopicIdRef.set(null);
                 refs.currentChatHistoryRef.set([]);
-                
+
                 // Call back to renderer to update UI
                 if (mainRendererFunctions.onItemDeleted) {
                     mainRendererFunctions.onItemDeleted();
@@ -420,7 +433,7 @@ const settingsManager = (() => {
 
         try {
             const models = await electronAPI.sovitsGetModels();
-            
+
             // Clear existing options
             agentTtsVoicePrimarySelect.innerHTML = '<option value="">不使用语音</option>';
             agentTtsVoiceSecondarySelect.innerHTML = '<option value="">不使用</option>';
@@ -548,7 +561,7 @@ const settingsManager = (() => {
             agentMaxOutputTokensInput = options.elements.agentMaxOutputTokensInput;
             agentTopPInput = document.getElementById('agentTopP');
             agentTopKInput = document.getElementById('agentTopK');
-            
+
             agentAvatarBorderColorInput = document.getElementById('agentAvatarBorderColor');
             agentAvatarBorderColorTextInput = document.getElementById('agentAvatarBorderColorText');
             agentNameTextColorInput = document.getElementById('agentNameTextColor');
@@ -557,7 +570,7 @@ const settingsManager = (() => {
             openModelSelectBtn = options.elements.openModelSelectBtn;
             topicSummaryModelInput = options.elements.topicSummaryModelInput;
             openTopicSummaryModelSelectBtn = options.elements.openTopicSummaryModelSelectBtn;
-            
+
             agentTtsVoicePrimarySelect = document.getElementById('agentTtsVoicePrimary');
             agentTtsRegexPrimaryInput = document.getElementById('agentTtsRegexPrimary');
             agentTtsVoiceSecondarySelect = document.getElementById('agentTtsVoiceSecondary');
@@ -574,7 +587,7 @@ const settingsManager = (() => {
                     modelList = document.getElementById('modelList');
                     modelSearchInput = document.getElementById('modelSearchInput');
                     refreshModelsBtn = document.getElementById('refreshModelsBtn');
-                    
+
                     if (modelSearchInput) modelSearchInput.addEventListener('input', filterModels);
                     if (refreshModelsBtn) refreshModelsBtn.addEventListener('click', handleRefreshModels);
                 }
@@ -602,7 +615,7 @@ const settingsManager = (() => {
                 if (modalId === 'globalSettingsModal') {
                     topicSummaryModelInput = document.getElementById('topicSummaryModel');
                     openTopicSummaryModelSelectBtn = document.getElementById('openTopicSummaryModelSelectBtn');
-                    
+
                     if (openTopicSummaryModelSelectBtn) {
                         openTopicSummaryModelSelectBtn.addEventListener('click', () => handleOpenModelSelect(topicSummaryModelInput));
                     }
@@ -616,7 +629,7 @@ const settingsManager = (() => {
             if (deleteItemBtn) {
                 deleteItemBtn.addEventListener('click', handleDeleteCurrentItem);
             }
-            if(agentAvatarInput){
+            if (agentAvatarInput) {
                 agentAvatarInput.addEventListener('change', (event) => {
                     const file = event.target.files[0];
                     if (file) {
@@ -626,13 +639,13 @@ const settingsManager = (() => {
                                 const previewUrl = URL.createObjectURL(croppedFileResult);
                                 agentAvatarPreview.src = previewUrl;
                                 agentAvatarPreview.style.display = 'block';
-                                
+
                                 // 上传新头像后移除 no-avatar 类
                                 const avatarWrapper = agentAvatarPreview.closest('.agent-avatar-wrapper');
                                 if (avatarWrapper) {
                                     avatarWrapper.classList.remove('no-avatar');
                                 }
-                                
+
                                 // 只对用户上传的真实头像进行颜色提取，不对默认头像提取
                                 // 裁切完成后立即计算颜色并填充到输入框
                                 // 使用与全局设置相同的getDominantAvatarColor函数以保持一致性
@@ -649,16 +662,16 @@ const settingsManager = (() => {
                                                     const hex = x.toString(16);
                                                     return hex.length === 1 ? '0' + hex : hex;
                                                 }).join('');
-                                                
+
                                                 // 填充到两个颜色输入框
                                                 agentAvatarBorderColorInput.value = hexColor;
                                                 agentAvatarBorderColorTextInput.value = hexColor;
                                                 agentNameTextColorInput.value = hexColor;
                                                 agentNameTextColorTextInput.value = hexColor;
-                                                
+
                                                 // 更新头像预览的边框颜色
                                                 agentAvatarPreview.style.borderColor = hexColor;
-                                                
+
                                                 console.log('[SettingsManager] Auto-filled colors from avatar:', hexColor);
                                             }
                                         }
@@ -679,13 +692,13 @@ const settingsManager = (() => {
                                                     const hex = x.toString(16);
                                                     return hex.length === 1 ? '0' + hex : hex;
                                                 }).join('');
-                                                
+
                                                 agentAvatarBorderColorInput.value = hexColor;
                                                 agentAvatarBorderColorTextInput.value = hexColor;
                                                 agentNameTextColorInput.value = hexColor;
                                                 agentNameTextColorTextInput.value = hexColor;
                                                 agentAvatarPreview.style.borderColor = hexColor;
-                                                
+
                                                 console.log('[SettingsManager] Auto-filled colors from avatar (fallback):', hexColor);
                                             }
                                         }
@@ -694,7 +707,7 @@ const settingsManager = (() => {
                             }
                         }, 'agent');
                     } else {
-                        if(agentAvatarPreview) agentAvatarPreview.style.display = 'none';
+                        if (agentAvatarPreview) agentAvatarPreview.style.display = 'none';
                         mainRendererFunctions.setCroppedFile('agent', null);
                     }
                 });
@@ -710,13 +723,19 @@ const settingsManager = (() => {
                 refreshModelsBtn.addEventListener('click', handleRefreshModels);
             }
             if (electronAPI.onModelsUpdated) {
-                electronAPI.onModelsUpdated((models) => {
+                electronAPI.onModelsUpdated(async (models) => {
                     console.log('[SettingsManager] Received models-updated event. Repopulating list.');
-                    populateModelList(models, currentModelSelectCallback);
+                    let hotModelIds = [];
+                    try {
+                        if (electronAPI.getHotModels) {
+                            hotModelIds = await electronAPI.getHotModels();
+                        }
+                    } catch (e) { /* ignore */ }
+                    populateModelList(models, currentModelSelectCallback, hotModelIds);
                     uiHelper.showToastNotification('模型列表已刷新', 'success');
                 });
             }
-            
+
             if (agentTtsSpeedSlider && ttsSpeedValueSpan) {
                 agentTtsSpeedSlider.addEventListener('input', () => {
                     ttsSpeedValueSpan.textContent = parseFloat(agentTtsSpeedSlider.value).toFixed(1);
@@ -744,24 +763,24 @@ const settingsManager = (() => {
 
             // 设置鼠标快捷键
             setupMouseShortcuts();
-            
+
             // Setup color picker synchronization
             setupColorPickerSync();
-            
+
             // Setup params collapsible
             setupParamsCollapsible();
-            
+
             // Setup TTS collapsible
             setupTtsCollapsible();
-            
+
             // Setup style collapsible
             setupStyleCollapsible();
-            
+
             // Setup reset colors button
             if (resetAvatarColorsBtn) {
                 resetAvatarColorsBtn.addEventListener('click', handleResetAvatarColors);
             }
-            
+
             // Setup card CSS input real-time preview
             const agentCardCssInput = document.getElementById('agentCardCss');
             if (agentCardCssInput) {
@@ -785,18 +804,22 @@ const settingsManager = (() => {
         populateAssistantAgentSelect: populateAssistantAgentSelect,
         // Expose for external use if needed, e.g., in the save function
         completeVcpUrl: completeVcpUrl,
-        triggerAgentSave: async () => {
+        openModelSelectForInput: async (targetInputElement) => {
+            await handleOpenModelSelect(targetInputElement);
+        },
+        triggerAgentSave: async (overrideAgentId) => {
             // 触发Agent设置保存（不含头像）
-            const agentId = editingAgentIdInput.value;
+            // 支持传入锁定的agentId，防止异步操作期间DOM状态变化导致写入错误Agent
+            const agentId = overrideAgentId || editingAgentIdInput.value;
             if (!agentId) return;
-            
+
             let systemPromptData = {};
             if (promptManager) {
                 await promptManager.saveCurrentModeData();
                 const currentPrompt = await promptManager.getCurrentSystemPrompt();
                 systemPromptData.systemPrompt = currentPrompt;
             }
-            
+
             const newConfig = {
                 name: agentNameInput.value.trim(),
                 ...systemPromptData,
@@ -814,10 +837,10 @@ const settingsManager = (() => {
                 ttsSpeed: parseFloat(agentTtsSpeedSlider.value),
                 stripRegexes: currentAgentRegexes
             };
-            
+
             await electronAPI.saveAgentConfig(agentId, newConfig);
         },
-        
+
         /**
          * 重新加载当前 Agent 的设置（用于外部触发刷新）
          * @param {string} agentId - Agent ID
@@ -826,14 +849,14 @@ const settingsManager = (() => {
             // 检查是否正在编辑该 Agent
             if (editingAgentIdInput && editingAgentIdInput.value === agentId) {
                 console.log('[SettingsManager] Reloading settings for agent:', agentId);
-                
+
                 // 确保设置页面是激活状态
                 const settingsTab = document.getElementById('tabContentSettings');
                 const isSettingsVisible = settingsTab && settingsTab.classList.contains('active');
-                
+
                 if (!isSettingsVisible) {
                     console.log('[SettingsManager] Settings tab not visible, performing silent config reload');
-                    
+
                     try {
                         // 方案1：直接重新加载配置并填充表单，不切换标签
                         const config = await electronAPI.getAgentConfig(agentId);
@@ -842,21 +865,21 @@ const settingsManager = (() => {
                             const originalDisplay = settingsTab.style.display;
                             settingsTab.style.display = 'block';
                             settingsTab.classList.add('active');
-                            
+
                             // 等待 DOM 准备好
                             await new Promise(resolve => setTimeout(resolve, 50));
-                            
+
                             // 重新填充表单
                             await populateAgentSettingsForm(agentId, config);
                             console.log('[SettingsManager] Agent settings reloaded silently');
-                            
+
                             // 恢复原始显示状态
                             await new Promise(resolve => setTimeout(resolve, 50));
                             settingsTab.classList.remove('active');
                             if (originalDisplay !== 'block') {
                                 settingsTab.style.display = originalDisplay;
                             }
-                            
+
                             return { success: true, silent: true };
                         } else {
                             console.error('[SettingsManager] Failed to load config for silent reload:', config?.error);
@@ -867,7 +890,7 @@ const settingsManager = (() => {
                         return await performFullTabSwitch(agentId);
                     }
                 }
-                
+
                 // 重新加载配置（设置页面可见的情况）
                 const config = await electronAPI.getAgentConfig(agentId);
                 if (config && !config.error) {
@@ -893,14 +916,14 @@ const settingsManager = (() => {
      */
     async function performFullTabSwitch(agentId) {
         console.log('[SettingsManager] Falling back to full tab switch method');
-        
+
         const currentActiveTab = document.querySelector('.sidebar-tab-button.active');
         const currentTabName = currentActiveTab ? currentActiveTab.dataset.tab : 'agents';
-        
+
         if (window.uiManager && typeof window.uiManager.switchToTab === 'function') {
             window.uiManager.switchToTab('settings');
             await new Promise(resolve => setTimeout(resolve, 100));
-            
+
             try {
                 const config = await electronAPI.getAgentConfig(agentId);
                 if (config && !config.error) {
@@ -910,11 +933,11 @@ const settingsManager = (() => {
             } catch (error) {
                 console.error('[SettingsManager] Error during full tab switch:', error);
             }
-            
+
             await new Promise(resolve => setTimeout(resolve, 50));
             window.uiManager.switchToTab(currentTabName);
             console.log('[SettingsManager] Switched back to:', currentTabName);
-            
+
             return { success: true, fullSwitch: true };
         } else {
             console.warn('[SettingsManager] uiManager.switchToTab not available');
@@ -924,12 +947,17 @@ const settingsManager = (() => {
     }
 
     /**
-     * Opens the model selection modal and populates it with cached models.
-     */
+ * Opens the model selection modal and populates it with cached models.
+ */
     async function handleOpenModelSelect(targetInputElement) {
         try {
-            let models = await electronAPI.getCachedModels();
-            
+            // 并行获取模型列表、热门模型和收藏模型
+            let [models, hotModelIds, favoriteModelIds] = await Promise.all([
+                electronAPI.getCachedModels(),
+                electronAPI.getHotModels ? electronAPI.getHotModels() : Promise.resolve([]),
+                electronAPI.getFavoriteModels ? electronAPI.getFavoriteModels() : Promise.resolve([])
+            ]);
+
             // 如果缓存为空，尝试触发一次刷新并等待
             if (!models || models.length === 0) {
                 console.log('[SettingsManager] Cached models empty, requesting refresh...');
@@ -950,19 +978,21 @@ const settingsManager = (() => {
             uiHelper.openModal('modelSelectModal');
             // 确保在模态框打开后（DOM 元素已从模板实例化）再填充列表
             setTimeout(() => {
-                populateModelList(models, currentModelSelectCallback);
+                populateModelList(models, currentModelSelectCallback, hotModelIds || [], favoriteModelIds || []);
             }, 0);
         } catch (error) {
             console.error('Failed to get cached models:', error);
             uiHelper.showToastNotification('获取模型列表失败', 'error');
         }
     }
-
     /**
-     * Populates the model list in the modal.
-     * @param {Array} models - An array of model objects.
-     */
-    function populateModelList(models, onModelSelect) {
+ * Populates the model list in the modal.
+ * @param {Array} models - An array of model objects.
+ * @param {Function} onModelSelect - Callback when a model is selected.
+ * @param {Array<string>} hotModelIds - Array of hot model IDs (top N most used).
+ * @param {Array<string>} favoriteModelIds - Array of favorited model IDs.
+ */
+    function populateModelList(models, onModelSelect, hotModelIds = [], favoriteModelIds = []) {
         // 重新获取元素引用，因为它们可能是动态从模板生成的
         modelList = document.getElementById('modelList');
         if (!modelList) {
@@ -976,17 +1006,108 @@ const settingsManager = (() => {
             return;
         }
 
-        models.forEach(model => {
+        const favSet = new Set(favoriteModelIds);
+
+        // 创建模型列表项的辅助函数
+        function createModelLi(model, isHot, isFavoriteSection) {
             const li = document.createElement('li');
-            li.textContent = model.id;
             li.dataset.modelId = model.id;
+
+            // 热门标记
+            if (isHot) {
+                li.classList.add('hot-model');
+                const badge = document.createElement('span');
+                badge.className = 'hot-model-badge';
+                badge.textContent = '🔥';
+                li.appendChild(badge);
+            }
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'model-name-text';
+            nameSpan.textContent = model.id;
+            li.appendChild(nameSpan);
+
+            // 收藏星星
+            const starSpan = document.createElement('span');
+            starSpan.className = 'model-favorite-star';
+            const isFavorited = favSet.has(model.id);
+            if (isFavorited) {
+                starSpan.classList.add('favorited');
+                starSpan.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>';
+            } else {
+                starSpan.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>';
+            }
+            starSpan.title = isFavorited ? "取消收藏" : "收藏模型";
+
+            // 星星点击事件：切换收藏状态
+            starSpan.addEventListener('click', async (e) => {
+                e.stopPropagation(); // 阻止触发模型选择
+                if (electronAPI.toggleFavoriteModel) {
+                    const result = await electronAPI.toggleFavoriteModel(model.id);
+                    if (result && result.favorited !== undefined) {
+                        // 重新拉取一次整个列表的逻辑，保持UI一致性
+                        handleOpenModelSelect(document.getElementById('agentModel') || null); // Note: targetInputElement context is somewhat lost here, ideally we should just refresh the view
+                    }
+                }
+            });
+            li.appendChild(starSpan);
+
             li.addEventListener('click', () => {
                 if (typeof onModelSelect === 'function') {
                     onModelSelect(model.id);
                 }
             });
-            modelList.appendChild(li);
-        });
+            return li;
+        }
+
+        // 🔥 热门模型分区
+        if (hotModelIds.length > 0) {
+            // 按热门列表顺序筛选出存在于当前模型列表中的热门模型
+            const hotModels = hotModelIds
+                .map(id => models.find(m => m.id === id))
+                .filter(Boolean);
+
+            if (hotModels.length > 0) {
+                const hotTitle = document.createElement('li');
+                hotTitle.className = 'model-section-title';
+                hotTitle.textContent = '🔥 热门模型';
+                modelList.appendChild(hotTitle);
+
+                hotModels.forEach(model => {
+                    modelList.appendChild(createModelLi(model, true, false));
+                });
+            }
+        }
+
+        // ⭐ 收藏模型分区
+        if (favoriteModelIds.length > 0) {
+            const favoriteModels = favoriteModelIds
+                .map(id => models.find(m => m.id === id))
+                .filter(Boolean);
+
+            if (favoriteModels.length > 0) {
+                const favTitle = document.createElement('li');
+                favTitle.className = 'model-section-title';
+                favTitle.textContent = '⭐ 收藏模型';
+                modelList.appendChild(favTitle);
+
+                favoriteModels.forEach(model => {
+                    modelList.appendChild(createModelLi(model, false, true));
+                });
+            }
+        }
+
+        // 📋 全部模型分区
+        if (models.length > 0) {
+            const allTitle = document.createElement('li');
+            allTitle.className = 'model-section-title';
+            allTitle.textContent = '📋 全部模型';
+            modelList.appendChild(allTitle);
+
+            models.forEach(model => {
+                modelList.appendChild(createModelLi(model, false, false));
+            });
+        }
     }
 
     /**
@@ -997,11 +1118,24 @@ const settingsManager = (() => {
         const items = modelList.getElementsByTagName('li');
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
+            // 分区标题跟随其子项的可见性
+            if (item.classList.contains('model-section-title')) {
+                // 先隐藏标题，后面根据子项可见性再决定
+                item.style.display = filter ? 'none' : '';
+                continue;
+            }
             const txtValue = item.textContent || item.innerText;
             if (txtValue.toLowerCase().indexOf(filter) > -1) {
-                item.style.display = "";
+                item.style.display = '';
             } else {
-                item.style.display = "none";
+                item.style.display = 'none';
+            }
+        }
+        // 搜索时隐藏所有分区标题以得到扁平化结果
+        // 无搜索时恢复分区标题
+        if (!filter) {
+            for (let i = 0; i < items.length; i++) {
+                items[i].style.display = '';
             }
         }
     }
@@ -1031,7 +1165,7 @@ const settingsManager = (() => {
 
         const divider = document.createElement('hr');
         divider.className = 'form-divider';
-        
+
         const container = document.createElement('div');
         container.className = 'form-group strip-regex-container';
 
@@ -1061,7 +1195,7 @@ const settingsManager = (() => {
         importBtn.style.marginTop = '8px';
         importBtn.addEventListener('click', () => handleImportRegex());
         container.appendChild(importBtn);
-        
+
         // 在导入正则按钮后添加分隔线
         const bottomDivider = document.createElement('hr');
         bottomDivider.className = 'form-divider';
@@ -1073,7 +1207,7 @@ const settingsManager = (() => {
         const parent = ttsCollapsibleContainer.parentNode;
         parent.insertBefore(divider, ttsCollapsibleContainer.nextSibling);
         parent.insertBefore(container, divider.nextSibling);
-        
+
         console.log('[SettingsManager] Regex UI created after TTS collapsible container');
     }
 
@@ -1134,7 +1268,7 @@ const settingsManager = (() => {
 
     function openRegexModal(ruleData = null) {
         uiHelper.openModal('regexRuleModal');
-        
+
         // Ensure elements are captured if they weren't already
         if (!regexRuleForm) {
             regexRuleModal = document.getElementById('regexRuleModal');
@@ -1158,7 +1292,7 @@ const settingsManager = (() => {
             regexRuleTitle.value = ruleData.title || '';
             regexRuleFind.value = ruleData.findPattern || '';
             regexRuleReplace.value = ruleData.replaceWith || '';
-            
+
             (ruleData.applyToRoles || []).forEach(role => {
                 const checkbox = regexRuleForm.querySelector(`input[name="applyToRoles"][value="${role}"]`);
                 if (checkbox) checkbox.checked = true;
@@ -1173,7 +1307,7 @@ const settingsManager = (() => {
             } else {
                 document.getElementById('applyToFrontend').checked = true;
             }
-            
+
             if (ruleData.applyToContext !== undefined) {
                 document.getElementById('applyToContext').checked = ruleData.applyToContext;
             } else if (ruleData.applyToScopes) {
@@ -1199,7 +1333,7 @@ const settingsManager = (() => {
 
     function handleRegexFormSubmit(event) {
         event.preventDefault();
-        
+
         const id = editingRegexRuleId.value || `rule_${Date.now()}`;
         const title = regexRuleTitle.value.trim();
         const findPattern = regexRuleFind.value.trim();
@@ -1311,7 +1445,7 @@ const settingsManager = (() => {
 
         console.log('[SettingsManager] Agent settings sticky buttons initialized.');
     }
-    
+
     /**
      * 设置颜色选择器与文本输入框的同步
      */
@@ -1322,7 +1456,7 @@ const settingsManager = (() => {
                 agentAvatarBorderColorTextInput.value = e.target.value;
                 updateAvatarPreviewStyle();
             });
-            
+
             agentAvatarBorderColorTextInput.addEventListener('input', (e) => {
                 const color = e.target.value.trim();
                 if (/^#[0-9A-F]{6}$/i.test(color)) {
@@ -1330,7 +1464,7 @@ const settingsManager = (() => {
                     updateAvatarPreviewStyle();
                 }
             });
-            
+
             agentAvatarBorderColorTextInput.addEventListener('blur', (e) => {
                 const color = e.target.value.trim();
                 if (!/^#[0-9A-F]{6}$/i.test(color)) {
@@ -1339,20 +1473,20 @@ const settingsManager = (() => {
                 }
             });
         }
-        
+
         // 名称文字颜色同步
         if (agentNameTextColorInput && agentNameTextColorTextInput) {
             agentNameTextColorInput.addEventListener('input', (e) => {
                 agentNameTextColorTextInput.value = e.target.value;
             });
-            
+
             agentNameTextColorTextInput.addEventListener('input', (e) => {
                 const color = e.target.value.trim();
                 if (/^#[0-9A-F]{6}$/i.test(color)) {
                     agentNameTextColorInput.value = color;
                 }
             });
-            
+
             agentNameTextColorTextInput.addEventListener('blur', (e) => {
                 const color = e.target.value.trim();
                 if (!/^#[0-9A-F]{6}$/i.test(color)) {
@@ -1361,10 +1495,10 @@ const settingsManager = (() => {
                 }
             });
         }
-        
+
         console.log('[SettingsManager] Color picker synchronization setup complete.');
     }
-    
+
     /**
      * 更新头像预览的样式
      */
@@ -1373,7 +1507,7 @@ const settingsManager = (() => {
             agentAvatarPreview.style.borderColor = agentAvatarBorderColorInput.value;
         }
     }
-    
+
     /**
      * 设置参数容器的折叠功能
      */
@@ -1383,42 +1517,42 @@ const settingsManager = (() => {
         const paramsToggleBtn = document.getElementById('paramsToggleBtn');
         const paramsSummary = document.getElementById('paramsSummary');
         const paramsContent = document.getElementById('paramsContent');
-        
+
         if (!paramsContainer || !paramsHeader || !paramsToggleBtn || !paramsSummary) {
             console.warn('[SettingsManager] Params collapsible elements not found');
             return;
         }
-        
+
         // 默认展开
         let isCollapsed = false;
-        
+
         // 更新摘要显示
         const updateSummary = () => {
             if (!isCollapsed) {
                 paramsSummary.textContent = '';
                 return;
             }
-            
+
             const temperature = agentTemperatureInput.value || '0.7';
             const contextLimit = agentContextTokenLimitInput.value || '4000';
             const maxOutput = agentMaxOutputTokensInput.value || '1000';
             const topP = agentTopPInput.value || '未设置';
             const topK = agentTopKInput.value || '未设置';
             const streamOutput = document.getElementById('agentStreamOutputTrue').checked ? '流式' : '非流式';
-            
+
             paramsSummary.textContent = `Temperature: ${temperature} | 上下文: ${contextLimit} | 最大输出: ${maxOutput} | Top P: ${topP} | Top K: ${topK} | 输出: ${streamOutput}`;
         };
-        
+
         // 切换折叠状态
         const toggleCollapse = () => {
             isCollapsed = !isCollapsed;
             paramsContainer.classList.toggle('collapsed', isCollapsed);
             updateSummary();
         };
-        
+
         // 点击头部切换
         paramsHeader.addEventListener('click', toggleCollapse);
-        
+
         // 监听输入变化以更新摘要
         const inputs = [
             agentTemperatureInput,
@@ -1429,7 +1563,7 @@ const settingsManager = (() => {
             document.getElementById('agentStreamOutputTrue'),
             document.getElementById('agentStreamOutputFalse')
         ];
-        
+
         inputs.forEach(input => {
             if (input) {
                 input.addEventListener('change', () => {
@@ -1439,10 +1573,10 @@ const settingsManager = (() => {
                 });
             }
         });
-        
+
         console.log('[SettingsManager] Params collapsible setup complete.');
     }
-    
+
     /**
      * 设置语音设置容器的折叠功能
      */
@@ -1452,41 +1586,41 @@ const settingsManager = (() => {
         const ttsToggleBtn = document.getElementById('ttsToggleBtn');
         const ttsSummary = document.getElementById('ttsSummary');
         const ttsContent = document.getElementById('ttsContent');
-        
+
         if (!ttsContainer || !ttsHeader || !ttsToggleBtn || !ttsSummary) {
             console.warn('[SettingsManager] TTS collapsible elements not found');
             return;
         }
-        
+
         // 默认展开
         let isTtsCollapsed = false;
-        
+
         // 更新摘要显示
         const updateTtsSummary = () => {
             if (!isTtsCollapsed) {
                 ttsSummary.textContent = '';
                 return;
             }
-            
+
             const primaryVoice = agentTtsVoicePrimarySelect.value || '不使用语音';
             const primaryRegex = agentTtsRegexPrimaryInput.value || '全部';
             const secondaryVoice = agentTtsVoiceSecondarySelect.value || '不使用';
             const secondaryRegex = agentTtsRegexSecondaryInput.value || '无';
             const speed = agentTtsSpeedSlider.value || '1.0';
-            
+
             ttsSummary.textContent = `主语言: ${primaryVoice} (${primaryRegex}) | 副语言: ${secondaryVoice} (${secondaryRegex}) | 语速: ${speed}`;
         };
-        
+
         // 切换折叠状态
         const toggleTtsCollapse = () => {
             isTtsCollapsed = !isTtsCollapsed;
             ttsContainer.classList.toggle('collapsed', isTtsCollapsed);
             updateTtsSummary();
         };
-        
+
         // 点击头部切换
         ttsHeader.addEventListener('click', toggleTtsCollapse);
-        
+
         // 监听输入变化以更新摘要
         const ttsInputs = [
             agentTtsVoicePrimarySelect,
@@ -1495,7 +1629,7 @@ const settingsManager = (() => {
             agentTtsRegexSecondaryInput,
             agentTtsSpeedSlider
         ];
-        
+
         ttsInputs.forEach(input => {
             if (input) {
                 const eventType = input.tagName === 'SELECT' ? 'change' : 'input';
@@ -1506,31 +1640,31 @@ const settingsManager = (() => {
                 });
             }
         });
-        
+
         console.log('[SettingsManager] TTS collapsible setup complete.');
     }
-    
+
     /**
      * 获取当前所有折叠区域的状态
      */
     function getCurrentCollapseStates() {
         const paramsContainer = document.querySelector('.agent-params-collapsible-container:has(#paramsToggleHeader)');
         const ttsContainer = document.querySelector('.agent-params-collapsible-container:has(#ttsToggleHeader)');
-        
+
         return {
             paramsCollapsed: paramsContainer ? paramsContainer.classList.contains('collapsed') : false,
             ttsCollapsed: ttsContainer ? ttsContainer.classList.contains('collapsed') : false
         };
     }
-    
+
     /**
      * 恢复折叠区域的状态
      */
     function restoreCollapseStates(agentConfig) {
         if (!agentConfig.uiCollapseStates) return;
-        
+
         const states = agentConfig.uiCollapseStates;
-        
+
         // 恢复参数设置折叠状态
         const paramsContainer = document.querySelector('.agent-params-collapsible-container:has(#paramsToggleHeader)');
         if (paramsContainer && states.paramsCollapsed) {
@@ -1545,12 +1679,12 @@ const settingsManager = (() => {
                     const topP = agentTopPInput.value || '未设置';
                     const topK = agentTopKInput.value || '未设置';
                     const streamOutput = document.getElementById('agentStreamOutputTrue').checked ? '流式' : '非流式';
-                    
+
                     paramsSummary.textContent = `Temperature: ${temperature} | 上下文: ${contextLimit} | 最大输出: ${maxOutput} | Top P: ${topP} | Top K: ${topK} | 输出: ${streamOutput}`;
                 }, 100);
             }
         }
-        
+
         // 恢复语音设置折叠状态
         const ttsContainer = document.querySelector('.agent-params-collapsible-container:has(#ttsToggleHeader)');
         if (ttsContainer && states.ttsCollapsed) {
@@ -1564,46 +1698,46 @@ const settingsManager = (() => {
                     const secondaryVoice = agentTtsVoiceSecondarySelect.value || '不使用';
                     const secondaryRegex = agentTtsRegexSecondaryInput.value || '无';
                     const speed = agentTtsSpeedSlider.value || '1.0';
-                    
+
                     ttsSummary.textContent = `主语言: ${primaryVoice} (${primaryRegex}) | 副语言: ${secondaryVoice} (${secondaryRegex}) | 语速: ${speed}`;
                 }, 100);
             }
         }
-        
+
         console.log('[SettingsManager] Collapse states restored:', states);
     }
-    
+
     /**
      * 设置自定义样式容器的折叠功能
      */
     function setupStyleCollapsible() {
         const styleContainer = document.querySelector('.agent-style-collapsible-container');
         const styleHeader = document.getElementById('styleCollapseHeader');
-        
+
         if (!styleContainer || !styleHeader) {
             console.warn('[SettingsManager] Style collapsible elements not found');
             return;
         }
-        
+
         // 点击头部切换折叠状态
         styleHeader.addEventListener('click', () => {
             styleContainer.classList.toggle('collapsed');
         });
-        
+
         console.log('[SettingsManager] Style collapsible setup complete.');
     }
-    
+
     /**
      * 处理重置头像颜色按钮点击
      */
     function handleResetAvatarColors() {
         const agentAvatarPreview = document.getElementById('agentAvatarPreview');
-        
+
         if (!agentAvatarPreview || !agentAvatarPreview.src || agentAvatarPreview.src === '#' || agentAvatarPreview.src.includes('default_avatar.png')) {
             uiHelper.showToastNotification('请先上传头像后再重置颜色', 'warning');
             return;
         }
-        
+
         // 从当前头像中提取颜色，使用与全局设置相同的方法
         if (window.getDominantAvatarColor) {
             window.getDominantAvatarColor(agentAvatarPreview.src).then((avgColor) => {
@@ -1618,16 +1752,16 @@ const settingsManager = (() => {
                             const hex = x.toString(16);
                             return hex.length === 1 ? '0' + hex : hex;
                         }).join('');
-                        
+
                         // 填充到两个颜色输入框
                         agentAvatarBorderColorInput.value = hexColor;
                         agentAvatarBorderColorTextInput.value = hexColor;
                         agentNameTextColorInput.value = hexColor;
                         agentNameTextColorTextInput.value = hexColor;
-                        
+
                         // 更新头像预览的边框颜色
                         agentAvatarPreview.style.borderColor = hexColor;
-                        
+
                         uiHelper.showToastNotification('已重置为头像默认颜色', 'success');
                         console.log('[SettingsManager] Colors reset to avatar default:', hexColor);
                     }
@@ -1652,13 +1786,13 @@ const settingsManager = (() => {
                             const hex = x.toString(16);
                             return hex.length === 1 ? '0' + hex : hex;
                         }).join('');
-                        
+
                         agentAvatarBorderColorInput.value = hexColor;
                         agentAvatarBorderColorTextInput.value = hexColor;
                         agentNameTextColorInput.value = hexColor;
                         agentNameTextColorTextInput.value = hexColor;
                         agentAvatarPreview.style.borderColor = hexColor;
-                        
+
                         uiHelper.showToastNotification('已重置为头像默认颜色', 'success');
                         console.log('[SettingsManager] Colors reset to avatar default (fallback):', hexColor);
                     }
@@ -1674,7 +1808,7 @@ const settingsManager = (() => {
     function applyCardCssToIdentityContainer(cardCss) {
         const identityContainer = document.querySelector('#agentSettingsContainer .agent-identity-container');
         if (!identityContainer) return;
-        
+
         if (cardCss && cardCss.trim()) {
             console.log('[SettingsManager] Applying card CSS to identity container:', cardCss);
             // 解析并应用CSS
@@ -1690,7 +1824,7 @@ const settingsManager = (() => {
             identityContainer.removeAttribute('style');
         }
     }
-    
+
 })();
 
 window.settingsManager = settingsManager;

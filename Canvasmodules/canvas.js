@@ -27,12 +27,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const diffViewContainer = document.getElementById('diff-view');
     const acceptChangesBtn = document.getElementById('accept-changes-btn');
     const rejectChangesBtn = document.getElementById('reject-changes-btn');
+    const canvasSearchInput = document.getElementById('canvasSearchInput');
+    const editorSearchBar = document.getElementById('editor-search-bar');
+    const editorSearchInput = document.getElementById('editorSearchInput');
+    const searchCount = document.getElementById('search-count');
+    const searchPrevBtn = document.getElementById('search-prev-btn');
+    const searchNextBtn = document.getElementById('search-next-btn');
+    const searchCloseBtn = document.getElementById('search-close-btn');
 
     let editor;
     let externalFileContent = null; // To store content from AI
     let diffView = null;
     const editorContextMenu = document.getElementById('editor-context-menu');
     let filesHistory = {}; // Object to store history arrays, keyed by file path
+    let allCanvasFiles = []; // Store all files for filtering
+    let searchMatches = [];
+    let currentMatchIndex = -1;
 
     // --- CodeMirror 5 Initialization ---
     function initializeEditor(initialData) {
@@ -95,6 +105,18 @@ document.addEventListener('DOMContentLoaded', () => {
             editorContextMenu.style.top = `${e.clientY}px`;
             editorContextMenu.style.left = `${e.clientX}px`;
             editorContextMenu.style.display = 'block';
+        });
+
+        // Search Shortcuts
+        editor.addKeyMap({
+            "Ctrl-F": (cm) => {
+                toggleSearchBar(true);
+            },
+            "Esc": (cm) => {
+                if (editorSearchBar.style.display !== 'none') {
+                    toggleSearchBar(false);
+                }
+            }
         });
 
         if (initialData.current) {
@@ -272,6 +294,114 @@ document.addEventListener('DOMContentLoaded', () => {
             toggleWrapBtn.textContent = `自动换行: ${!currentStatus ? '开' : '关'}`;
         }
     });
+
+    // --- Search Logic ---
+    function toggleSearchBar(show) {
+        if (show) {
+            editorSearchBar.style.display = 'flex';
+            editorSearchInput.focus();
+            if (editorSearchInput.value) {
+                doSearch(editorSearchInput.value);
+            }
+        } else {
+            editorSearchBar.style.display = 'none';
+            clearSearch();
+            editor.focus();
+        }
+    }
+
+    function clearSearch() {
+        searchMatches = [];
+        currentMatchIndex = -1;
+        searchCount.textContent = '0/0';
+        editor.operation(() => {
+            // Remove previous highlights
+            editor.getAllMarks().forEach(mark => {
+                if (mark.className === 'cm-search-match' || mark.className === 'cm-search-match-selected') {
+                    mark.clear();
+                }
+            });
+        });
+    }
+
+    function doSearch(query) {
+        clearSearch();
+        if (!query) return;
+
+        const cursor = editor.getSearchCursor(query, null, { caseFold: true });
+        while (cursor.findNext()) {
+            const mark = editor.markText(cursor.from(), cursor.to(), { className: 'cm-search-match' });
+            searchMatches.push({ from: cursor.from(), to: cursor.to(), mark: mark });
+        }
+
+        if (searchMatches.length > 0) {
+            currentMatchIndex = 0;
+            updateSearchUI();
+            jumpToMatch(currentMatchIndex);
+        } else {
+            searchCount.textContent = '0/0';
+        }
+    }
+
+    function updateSearchUI() {
+        searchCount.textContent = `${currentMatchIndex + 1}/${searchMatches.length}`;
+    }
+
+    function jumpToMatch(index) {
+        if (index < 0 || index >= searchMatches.length) return;
+
+        const match = searchMatches[index];
+        
+        // Highlight active match
+        editor.operation(() => {
+            searchMatches.forEach((m, i) => {
+                if (m.selectedMark) {
+                    m.selectedMark.clear();
+                    m.selectedMark = null;
+                }
+                if (i === index) {
+                    m.selectedMark = editor.markText(m.from(), m.to(), { className: 'cm-search-match-selected' });
+                }
+            });
+        });
+
+        editor.scrollIntoView({ from: match.from, to: match.to }, 100);
+        editor.setSelection(match.from, match.to);
+    }
+
+    editorSearchInput.addEventListener('input', () => {
+        doSearch(editorSearchInput.value);
+    });
+
+    editorSearchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            if (e.shiftKey) {
+                findPrev();
+            } else {
+                findNext();
+            }
+        } else if (e.key === 'Escape') {
+            toggleSearchBar(false);
+        }
+    });
+
+    searchNextBtn.addEventListener('click', findNext);
+    searchPrevBtn.addEventListener('click', findPrev);
+    searchCloseBtn.addEventListener('click', () => toggleSearchBar(false));
+
+    function findNext() {
+        if (searchMatches.length === 0) return;
+        currentMatchIndex = (currentMatchIndex + 1) % searchMatches.length;
+        updateSearchUI();
+        jumpToMatch(currentMatchIndex);
+    }
+
+    function findPrev() {
+        if (searchMatches.length === 0) return;
+        currentMatchIndex = (currentMatchIndex - 1 + searchMatches.length) % searchMatches.length;
+        updateSearchUI();
+        jumpToMatch(currentMatchIndex);
+    }
 
     historyList.addEventListener('click', (e) => {
         if (e.target && e.target.matches('li[data-path]')) {
@@ -568,8 +698,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateHistoryList(history) {
+        allCanvasFiles = history; // Store the full list
+        renderHistoryList(history);
+    }
+
+    function renderHistoryList(files) {
         historyList.innerHTML = '';
-        history.forEach(item => {
+        files.forEach(item => {
             const li = document.createElement('li');
             li.textContent = item.title;
             li.dataset.path = item.path;
@@ -579,6 +714,34 @@ document.addEventListener('DOMContentLoaded', () => {
             historyList.appendChild(li);
         });
     }
+
+    canvasSearchInput.addEventListener('input', async () => {
+        const searchTerm = canvasSearchInput.value.toLowerCase().trim();
+        if (!searchTerm) {
+            renderHistoryList(allCanvasFiles);
+            return;
+        }
+
+        const filteredFiles = [];
+        for (const file of allCanvasFiles) {
+            // Search in title
+            if (file.title.toLowerCase().includes(searchTerm)) {
+                filteredFiles.push(file);
+                continue;
+            }
+
+            // Search in content (if we have it or can get it)
+            try {
+                const fileData = await window.electronAPI.getTextContent(file.path);
+                if (fileData && fileData.toLowerCase().includes(searchTerm)) {
+                    filteredFiles.push(file);
+                }
+            } catch (err) {
+                console.error(`Failed to search in file ${file.path}:`, err);
+            }
+        }
+        renderHistoryList(filteredFiles);
+    });
 
     // --- Document Change History Logic ---
     function addContentHistory(path, content, isInitial = false) {

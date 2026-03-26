@@ -99,13 +99,18 @@ function initialize(context) {
                     const configPath = path.join(agentPath, 'config.json');
                     const avatarPathPng = path.join(agentPath, 'avatar.png');
                     const avatarPathJpg = path.join(agentPath, 'avatar.jpg');
-                    const avatarPathJpeg = path.join(agentPath, 'avatar.jpeg'); 
+                    const avatarPathJpeg = path.join(agentPath, 'avatar.jpeg');
                     const avatarPathGif = path.join(agentPath, 'avatar.gif');
-                    
+
                     let agentData = { id: folderName, name: folderName, avatarUrl: null, config: {} };
 
                     if (await fs.pathExists(configPath)) {
-                        const config = await fs.readJson(configPath);
+                        let config;
+                        if (agentConfigManager) {
+                            config = await agentConfigManager.readAgentConfig(folderName, { allowDefault: true });
+                        } else {
+                            config = await fs.readJson(configPath);
+                        }
 
                         // Load external regex rules if they exist
                         const regexPath = path.join(agentPath, 'regex_rules.json');
@@ -116,13 +121,13 @@ function initialize(context) {
                                 console.error(`Error reading regex_rules.json for agent ${folderName} in get-agents:`, e);
                             }
                         }
-                        
+
                         agentData.name = config.name || folderName;
                         agentData.config.avatarCalculatedColor = config.avatarCalculatedColor || null;
                         let topicsArray = config.topics && Array.isArray(config.topics) && config.topics.length > 0
-                                           ? config.topics
-                                           : [{ id: "default", name: "主要对话", createdAt: Date.now() }];
-                        
+                            ? config.topics
+                            : [{ id: "default", name: "主要对话", createdAt: Date.now() }];
+
                         if (!config.topics || !Array.isArray(config.topics) || config.topics.length === 0) {
                             try {
                                 config.topics = topicsArray;
@@ -132,7 +137,7 @@ function initialize(context) {
                                         topics: topicsArray
                                     }));
                                 } else {
-                                    await fs.writeJson(configPath, config, { spaces: 2 });
+                                    console.error(`AgentConfigManager not available, cannot save topics for agent ${folderName}`);
                                 }
                             } catch (e) {
                                 console.error(`Error saving default/fixed topics for agent ${folderName}:`, e);
@@ -162,6 +167,7 @@ function initialize(context) {
                             if (agentConfigManager) {
                                 await agentConfigManager.writeAgentConfig(folderName, defaultConfigData);
                             } else {
+                                console.warn(`AgentConfigManager not available, writing default config directly for new agent ${folderName}`);
                                 await fs.writeJson(configPath, defaultConfigData, { spaces: 2 });
                             }
                             agentData.config = defaultConfigData;
@@ -169,12 +175,12 @@ function initialize(context) {
                             console.error(`Error creating default config for agent ${folderName}:`, e);
                         }
                     }
-                    
+
                     if (await fs.pathExists(avatarPathPng)) agentData.avatarUrl = `file://${avatarPathPng}`;
                     else if (await fs.pathExists(avatarPathJpg)) agentData.avatarUrl = `file://${avatarPathJpg}`;
                     else if (await fs.pathExists(avatarPathJpeg)) agentData.avatarUrl = `file://${avatarPathJpeg}`;
                     else if (await fs.pathExists(avatarPathGif)) agentData.avatarUrl = `file://${avatarPathGif}`;
-                    
+
                     agents.push(agentData);
                 }
             }
@@ -185,7 +191,7 @@ function initialize(context) {
             } catch (readError) {
                 console.warn('Could not read settings for agent order:', readError);
             }
-        
+
             if (settings.agentOrder && Array.isArray(settings.agentOrder)) {
                 const orderedAgents = [];
                 const agentMap = new Map(agents.map(agent => [agent.id, agent]));
@@ -258,7 +264,7 @@ function initialize(context) {
                         }
                         return rule;
                     });
-                    
+
                     // 使用清理过的数据进行保存
                     await fs.writeJson(regexPath, cleanedRegexes, { spaces: 2 });
                 } else {
@@ -272,7 +278,7 @@ function initialize(context) {
             // CRITICAL: Always remove stripRegexes from the object to be saved to config.json
             const configToSave = { ...config };
             delete configToSave.stripRegexes;
-            
+
             if (agentConfigManager) {
                 // 使用AgentConfigManager进行安全的配置更新
                 const result = await agentConfigManager.updateAgentConfig(agentId, existingConfig => ({
@@ -281,23 +287,9 @@ function initialize(context) {
                 }));
                 return { success: true, message: `Agent ${agentId} 配置已保存。` };
             } else {
-                // 回退到原来的方式（为了兼容性）
-                const configPath = path.join(agentDir, 'config.json');
-                let existingConfig = {};
-                if (await fs.pathExists(configPath)) {
-                    try {
-                        existingConfig = await fs.readJson(configPath);
-                    } catch (e) {
-                        console.error(`读取现有Agent配置失败 ${agentId}:`, e);
-                        return { error: `读取现有Agent配置失败: ${e.message}` };
-                    }
-                }
-                
-                // Merge configs
-                const newConfigData = { ...existingConfig, ...configToSave };
-                
-                await fs.writeJson(configPath, newConfigData, { spaces: 2 });
-                return { success: true, message: `Agent ${agentId} 配置已保存。` };
+                // AgentConfigManager 不可用，报错而非静默 fallback
+                console.error(`AgentConfigManager not available, cannot safely save config for agent ${agentId}`);
+                return { error: 'AgentConfigManager 未初始化，无法安全保存配置。' };
             }
         } catch (error) {
             console.error(`保存Agent ${agentId} 配置失败:`, error);
@@ -315,19 +307,9 @@ function initialize(context) {
                 }));
                 return { success: true, message: `Agent ${agentId} 配置已更新。` };
             } else {
-                // 回退方式
-                const agentDir = path.join(AGENT_DIR, agentId);
-                const configPath = path.join(agentDir, 'config.json');
-                
-                let existingConfig = {};
-                if (await fs.pathExists(configPath)) {
-                    existingConfig = await fs.readJson(configPath);
-                }
-                
-                const newConfig = { ...existingConfig, ...updates };
-                await fs.writeJson(configPath, newConfig, { spaces: 2 });
-                
-                return { success: true, message: `Agent ${agentId} 配置已更新。` };
+                // AgentConfigManager 不可用，报错而非静默 fallback
+                console.error(`AgentConfigManager not available, cannot safely update config for agent ${agentId}`);
+                return { error: 'AgentConfigManager 未初始化，无法安全更新配置。' };
             }
         } catch (error) {
             console.error(`更新Agent ${agentId} 配置失败:`, error);
@@ -349,9 +331,13 @@ function initialize(context) {
             // 1. 获取 Agent 名称
             let agentConfig = {};
             try {
-                const configPath = path.join(agentDir, 'config.json');
-                if (await fs.pathExists(configPath)) {
-                    agentConfig = await fs.readJson(configPath);
+                if (agentConfigManager) {
+                    agentConfig = await agentConfigManager.readAgentConfig(agentId, { allowDefault: true });
+                } else {
+                    const configPath = path.join(agentDir, 'config.json');
+                    if (await fs.pathExists(configPath)) {
+                        agentConfig = await fs.readJson(configPath);
+                    }
                 }
             } catch (e) {
                 console.warn(`无法读取Agent ${agentId} 的配置以获取名称:`, e);
@@ -396,7 +382,7 @@ function initialize(context) {
             // 4. 集中式头像存储逻辑
             if (AVATAR_IMAGE_DIR) {
                 await fs.ensureDir(AVATAR_IMAGE_DIR);
-                
+
                 // 4a. 删除集中式目录中旧的、以 Agent 名称命名的头像文件
                 const centralizedOldAvatars = allowedExtensions.map(e => path.join(AVATAR_IMAGE_DIR, `${agentName}${e}`));
                 for (const oldAvatarPath of centralizedOldAvatars) {
@@ -432,7 +418,7 @@ function initialize(context) {
 
             let configToSave;
             if (initialConfig) {
-                configToSave = { ...initialConfig, name: agentName }; 
+                configToSave = { ...initialConfig, name: agentName };
             } else {
                 configToSave = {
                     name: agentName,
@@ -455,17 +441,17 @@ function initialize(context) {
             } else {
                 await fs.writeJson(path.join(agentDir, 'config.json'), configToSave, { spaces: 2 });
             }
-            
+
             if (configToSave.topics && configToSave.topics.length > 0) {
                 const firstTopicId = configToSave.topics[0].id || "default";
                 const topicHistoryDir = path.join(USER_DATA_DIR, agentId, 'topics', firstTopicId);
                 await fs.ensureDir(topicHistoryDir);
                 const historyFilePath = path.join(topicHistoryDir, 'history.json');
                 if (!await fs.pathExists(historyFilePath)) {
-                     await fs.writeJson(historyFilePath, [], { spaces: 2 });
+                    await fs.writeJson(historyFilePath, [], { spaces: 2 });
                 }
             }
-            
+
             return { success: true, agentId: agentId, agentName: agentName, config: configToSave, avatarUrl: null };
         } catch (error) {
             console.error('创建Agent失败:', error);
@@ -517,7 +503,7 @@ async function getAgentsInternal({ AGENT_DIR }) {
         const agentDirs = await fs.readdir(AGENT_DIR);
         const agentConfigs = await Promise.all(agentDirs.map(async (agentId) => {
             const configPath = path.join(AGENT_DIR, agentId, 'config.json');
-            
+
             let config;
             try {
                 if (agentConfigManagerInstance) {
@@ -542,7 +528,7 @@ async function getAgentsInternal({ AGENT_DIR }) {
                     else if (await fs.pathExists(avatarPathJpg)) avatarUrl = `file://${avatarPathJpg}`;
                     else if (await fs.pathExists(avatarPathJpeg)) avatarUrl = `file://${avatarPathJpeg}`;
                     else if (await fs.pathExists(avatarPathGif)) avatarUrl = `file://${avatarPathGif}`;
-                    
+
                     return { ...config, id: agentId, type: 'agent', avatarUrl };
                 } catch (e) {
                     console.error(`Error reading agent config for ${agentId}:`, e);
@@ -559,8 +545,8 @@ async function getAgentsInternal({ AGENT_DIR }) {
 }
 
 async function getGroupsInternal({ USER_DATA_DIR }) {
-     // Correcting path calculation based on user feedback (assuming path.dirname(USER_DATA_DIR) already points to the AppData root)
-     const groupsDir = path.join(path.dirname(USER_DATA_DIR), 'AgentGroups');
+    // Correcting path calculation based on user feedback (assuming path.dirname(USER_DATA_DIR) already points to the AppData root)
+    const groupsDir = path.join(path.dirname(USER_DATA_DIR), 'AgentGroups');
     try {
         if (!await fs.pathExists(groupsDir)) {
             return [];
@@ -597,9 +583,14 @@ async function getGroupsInternal({ USER_DATA_DIR }) {
     }
 }
 
+function getAgentConfigManager() {
+    return agentConfigManagerInstance;
+}
+
 module.exports = {
     initialize,
-    getAgentConfigById
+    getAgentConfigById,
+    getAgentConfigManager
 };
 
 // recoverSettingsFromCorruptedFile 已由 SettingsManager 处理，无需此函数

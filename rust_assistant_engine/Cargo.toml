@@ -1,0 +1,33 @@
+[package]
+name = "assistant_core_server"
+version = "0.1.0"
+edition = "2021"
+description = "VCP Selection Assistant Rust Sidecar"
+
+[[bin]]
+name = "assistant_core_server"
+path = "src/main.rs"
+
+[dependencies]
+actix-web = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+env_logger = "0.11"
+tokio = { version = "1", features = ["full"] }
+device_query = "2"
+active-win-pos-rs = "0.6"
+lazy_static = "1.4"
+arboard = "3.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi-util = "0.1"
+winapi = { version = "0.3", features = ["winuser"] }
+windows = { version = "0.58", features = [
+	"Win32_Foundation",
+	"Win32_System_Com",
+	"Win32_UI_Accessibility"
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["xfixes"] }

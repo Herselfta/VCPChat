@@ -1,24 +1,64 @@
 [package]
-name = "rust_audio_resampler"
-version = "0.1.0"
+name = "vcp_audio_engine"
+version = "2.0.0"
 edition = "2021"
+description = "VCP Hi-Fi Audio Engine - Full Rust Native"
 
 [lib]
-name = "rust_audio_resampler"
-crate-type = ["cdylib"]
+name = "vcp_audio_engine"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "audio_server"
+path = "src/main.rs"
 
 [dependencies]
-pyo3 = { version = "0.23.3", features = ["extension-module"] }
-numpy = "0.23.0"
-ndarray = "0.15.4"
-soxr = "0.6"
-rustfft = "6.2.0"
+# --- Core Audio ---
+symphonia = { version = "0.5", features = ["all"] }
+cpal = "0.15"
+soxr = "0.6.0"   # Restored for f64 Hi-Fi SoX VHQ resampling
+
+# --- Parallelism ---
+rayon = "1.10"
+crossbeam = "0.8"
+parking_lot = "0.12"
+
+# --- WASAPI Exclusive Mode (Windows only) ---
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.22"
+
+# --- HTTP/WebSocket Server ---
+actix-web = "4"
+actix-ws = "0.3"
+actix-rt = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# --- DSP ---
+rustfft = "6.2"
 rand = "0.8"
 
+# --- Utilities ---
+log = "0.4"
+env_logger = "0.11"
+thiserror = "2"
+dotenv = "0.15"
+sha2 = "0.10"
+hex = "0.4"
+
+# --- Optional: PyO3 for backward compat ---
+pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
+numpy = { version = "0.23", optional = true }
+
+[features]
+default = []
+python = ["pyo3", "numpy"]
+
 [profile.release]
-lto = "fat"              # 全程序链接时优化
-codegen-units = 1        # 单代码生成单元，更好优化
-panic = "abort"          # 减少 unwinding 开销
+lto = "fat"
+codegen-units = 1
+panic = "abort"
 opt-level = 3
 
 [profile.release.build-override]

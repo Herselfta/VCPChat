@@ -16,6 +16,7 @@
             --accent-chain: #9b59b6;
             --accent-agent: #f1c40f;
             --accent-memo: #1abc9c;
+            --accent-dream: #e84393;
         }
 
         body {
@@ -348,6 +349,7 @@
         .type-chain { --accent-color: var(--accent-chain); }
         .type-chat { --accent-color: var(--accent-agent); }
         .type-memo { --accent-color: var(--accent-memo); }
+        .type-dream { --accent-color: var(--accent-dream); }
 
         /* RAG Item */
         .rag-sub-item {
@@ -482,6 +484,7 @@
                 <button class="filter-btn" data-type="chain" onclick="filterLogs('chain', this)">元思考链</button>
                 <button class="filter-btn" data-type="chat" onclick="filterLogs('chat', this)">Agent会话</button>
                 <button class="filter-btn" data-type="memo" onclick="filterLogs('memo', this)">记忆检索</button>
+                <button class="filter-btn" data-type="dream" onclick="filterLogs('dream', this)">Agent梦境</button>
                 <button class="filter-btn" onclick="clearLogs()" style="margin-left: 10px; color: #ff5f56;">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                 </button>
@@ -542,7 +545,8 @@
                 'rag': 'rgba(52, 152, 219, 0.4)', // --accent-rag
                 'chain': 'rgba(155, 89, 182, 0.4)', // --accent-chain
                 'chat': 'rgba(241, 196, 15, 0.4)', // --accent-agent
-                'memo': 'rgba(26, 188, 156, 0.4)' // --accent-memo
+                'memo': 'rgba(26, 188, 156, 0.4)', // --accent-memo
+                'dream': 'rgba(232, 67, 147, 0.4)' // --accent-dream
             };
             highlight.style.backgroundColor = typeColors[type] || typeColors['all'];
 
@@ -659,6 +663,9 @@
             if (data.type === 'AGENT_PRIVATE_CHAT_PREVIEW') return displayAgentChat(data);
             if (data.type === 'META_THINKING_CHAIN') return displayChain(data);
             if (data.type === 'AI_MEMO_RETRIEVAL') return displayMemo(data);
+            if (data.type.startsWith('AGENT_DREAM_')) return displayDreamInfo(data);
+            if (data.type === 'DailyNote') return displayDailyNote(data);
+            if (data.source === 'AgentAssistant') return displayAgentAssistantNotification(data);
 
             const block = document.createElement('div');
             block.className = 'card-base type-rag card-enter';
@@ -836,12 +843,144 @@
             prependCard(block);
         }
 
+        // 5. DAILY NOTE BLOCK
+        function displayDailyNote(data) {
+            const block = document.createElement('div');
+            block.className = 'card-base type-memo card-enter'; // Reuse memo style
+            
+            const isFullText = data.action === 'FullTextRecall';
+            const icon = isFullText ?
+                '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>' :
+                '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>';
+
+            block.innerHTML = `
+                <h3 style="color: var(--accent-memo);">
+                    ${icon}
+                    日记召回: ${data.dbName}
+                </h3>
+                <div class="meta-info">
+                    <span class="meta-pill">模式: ${isFullText ? '全量召回 <<>>' : '直接引入 {{}}'}</span>
+                </div>
+                <div style="color: var(--accent-memo); font-weight: bold; padding: 10px; background: rgba(26, 188, 156, 0.1); border-radius: 8px; border-left: 3px solid var(--accent-memo);">
+                    ${data.message}
+                </div>
+            `;
+            prependCard(block);
+        }
+
+        // 6. DREAM BLOCK
+        function displayDreamInfo(data) {
+            const block = document.createElement('div');
+            block.className = 'card-base type-dream card-enter';
+            
+            let icon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>'; // Moon icon
+            let title = `Agent 梦境: ${data.agentName}`;
+            let contentHTML = '';
+
+            switch(data.type) {
+                case 'AGENT_DREAM_START':
+                    contentHTML = `<div style="color: var(--accent-dream); font-weight: bold; padding: 10px; background: rgba(232, 67, 147, 0.1); border-radius: 8px;">${data.message}</div>`;
+                    break;
+                case 'AGENT_DREAM_ASSOCIATIONS':
+                    title += ' - 联想召回';
+                    icon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>'; // Layers icon
+                    contentHTML = `
+                        <div class="meta-info">
+                            <span class="meta-pill">种子数: ${data.seedCount}</span>
+                            <span class="meta-pill">联想数: ${data.associationCount}</span>
+                        </div>
+                        <div style="margin-top:10px;">
+                            <div style="font-size:0.8em; opacity:0.6; margin-bottom:5px;">梦境种子:</div>
+                            ${data.seeds.map(s => `<div class="rag-sub-item" style="font-size:0.9em;"><strong>${s.file}</strong>: ${s.snippet}</div>`).join('')}
+                        </div>
+                        <div style="margin-top:10px;">
+                            <div style="font-size:0.8em; opacity:0.6; margin-bottom:5px;">联想内容:</div>
+                            ${data.associations.map(a => `<div class="rag-sub-item" style="font-size:0.9em; display:flex; justify-content:space-between;"><span>${a.file}</span><span class="score-badge score-med">${a.score}</span></div>`).join('')}
+                        </div>
+                    `;
+                    break;
+                case 'AGENT_DREAM_NARRATIVE':
+                    title += ' - 梦叙事';
+                    icon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>'; // Book icon
+                    contentHTML = `
+                        <div class="meta-info"><span class="meta-pill">全长: ${data.fullLength} 字</span></div>
+                        ${createContentHTML(data.narrative)}
+                    `;
+                    break;
+                case 'AGENT_DREAM_OPERATIONS':
+                    title += ' - 梦操作';
+                    icon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>'; // Activity icon
+                    contentHTML = `
+                        <div class="meta-info">
+                            <span class="meta-pill">操作数: ${data.operationCount}</span>
+                            <span class="meta-pill">日志: ${data.logFile}</span>
+                        </div>
+                        <div style="margin-top:10px;">
+                            ${data.operations.map(op => `
+                                <div class="rag-sub-item" style="display:flex; justify-content:space-between; align-items:center;">
+                                    <span><code style="color:var(--accent-dream)">${op.type}</code> <small style="opacity:0.5;">${op.operationId}</small></span>
+                                    <span class="score-badge ${op.status === 'pending_review' ? 'score-med' : 'score-high'}">${op.status}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                    break;
+                case 'AGENT_DREAM_END':
+                    title += ' - 梦境状态';
+                    icon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>'; // X circle icon
+                    contentHTML = `<div style="color: #ff5f56; font-weight: bold; padding: 10px; background: rgba(255, 95, 86, 0.1); border-radius: 8px;">${data.error || '梦境结束'}</div>`;
+                    break;
+            }
+
+            block.innerHTML = `
+                <h3 style="color: var(--accent-dream);">
+                    ${icon}
+                    ${title}
+                </h3>
+                <div class="meta-info">
+                    <span class="meta-pill">DreamID: ${data.dreamId}</span>
+                    <span class="meta-pill">Time: ${new Date(data.timestamp).toLocaleTimeString()}</span>
+                </div>
+                ${contentHTML}
+            `;
+            prependCard(block);
+        }
+
+        // 7. AGENT ASSISTANT NOTIFICATION BLOCK
+        function displayAgentAssistantNotification(data) {
+            const block = document.createElement('div');
+            block.className = 'card-base type-chat card-enter'; // Use chat style for agent category
+            
+            const isSucceed = data.message.includes('Succeed');
+            const isFailed = data.message.includes('Failed');
+            const dotClass = isSucceed ? 'dot-green' : (isFailed ? 'dot-red' : 'dot-orange');
+            
+            block.innerHTML = `
+                <h3 style="color: var(--accent-agent);">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><polyline points="17 11 19 13 23 9"></polyline></svg>
+                    Agent 助手通知
+                </h3>
+                <div class="meta-info">
+                    <span class="status-pill" style="margin-bottom:0; background:transparent; border:none; padding:0;">
+                        <div class="status-dot ${dotClass}"></div>
+                        <span style="color:var(--accent-agent);">${data.source}</span>
+                    </span>
+                    <span class="meta-pill">Time: ${new Date().toLocaleTimeString()}</span>
+                </div>
+                <div style="margin-top:10px; padding:12px; background:rgba(241, 196, 15, 0.1); border-radius:8px; border-left:3px solid var(--accent-agent); color:rgba(255,255,255,0.9); font-size:0.95rem;">
+                    ${marked.parse(data.message)}
+                </div>
+            `;
+            prependCard(block);
+        }
+
         function prependCard(element) {
             // Check filter before adding
             const type = element.classList.contains('type-rag') ? 'rag' :
                          element.classList.contains('type-chain') ? 'chain' :
                          element.classList.contains('type-chat') ? 'chat' :
-                         element.classList.contains('type-memo') ? 'memo' : 'all';
+                         element.classList.contains('type-memo') ? 'memo' :
+                         element.classList.contains('type-dream') ? 'dream' : 'all';
             
             if (currentFilter !== 'all' && currentFilter !== type) {
                 element.style.display = 'none';

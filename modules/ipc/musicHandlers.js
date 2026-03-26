@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs-extra');
 const { Worker } = require('worker_threads');
 const lyricFetcher = require('../lyricFetcher'); // Import the new lyric fetcher
-const AUDIO_ENGINE_URL = 'http://127.0.0.1:5555';
+const AUDIO_ENGINE_URL = 'http://127.0.0.1:63789';
 let fetch;
 
 let musicWindow = null;
@@ -49,9 +49,9 @@ function createOrFocusMusicWindow() {
 
         console.log('[Music] Creating new music window instance.');
         musicWindow = new BrowserWindow({
-            width: 900,
+            width: 1200,
             height: 700,
-            minWidth: 400,
+            minWidth: 900,
             minHeight: 600,
             title: '音乐播放器',
             frame: false, // 移除原生窗口框架
@@ -68,7 +68,7 @@ function createOrFocusMusicWindow() {
         });
 
         musicWindow.loadFile(path.join(__dirname, '..', '..', 'Musicmodules', 'music.html'));
-        
+
         openChildWindows.push(musicWindow);
         musicWindow.setMenu(null);
 
@@ -125,14 +125,14 @@ async function audioEngineApi(endpoint, method = 'POST', body = null) {
         if (body) {
             options.body = JSON.stringify(body);
         }
-        
+
         const response = await fetch(url, options);
 
         if (!response.ok) {
             const errorText = await response.text();
             throw new Error(`Audio engine request failed with status ${response.status}: ${errorText}`);
         }
-        
+
         return await response.json();
     } catch (error) {
         console.error(`[Music] Error calling Audio Engine API endpoint '${endpoint}':`, error.message);
@@ -165,7 +165,7 @@ async function handleMusicControl(args) {
                 if (track) {
                     // Load the track in the engine
                     await audioEngineApi('/load', 'POST', { path: track.path });
-                    
+
                     // Tell the UI to update with the new track information
                     if (musicWindow && !musicWindow.isDestroyed()) {
                         musicWindow.webContents.send('music-set-track', track);
@@ -235,7 +235,7 @@ function initialize(options) {
         ipcMain.handle('music-seek', (event, positionSeconds) => {
             return audioEngineApi('/seek', 'POST', { position: positionSeconds });
         });
-        
+
         ipcMain.handle('music-get-state', async () => {
             return await audioEngineApi('/state', 'GET');
         });
@@ -256,7 +256,7 @@ function initialize(options) {
 
         // --- New handler for EQ ---
         ipcMain.handle('music-set-eq', (event, { bands, enabled }) => {
-           return audioEngineApi('/set_eq', 'POST', { bands, enabled });
+            return audioEngineApi('/set_eq', 'POST', { bands, enabled });
         });
 
         // --- New handler for Upsampling ---
@@ -271,8 +271,8 @@ function initialize(options) {
         ipcMain.handle('music-configure-optimizations', (event, data) => {
             return audioEngineApi('/configure_optimizations', 'POST', data);
         });
- 
-         ipcMain.on('open-music-folder', async (event) => {
+
+        ipcMain.on('open-music-folder', async (event) => {
             const result = await dialog.showOpenDialog(mainWindow, {
                 properties: ['openDirectory']
             });
@@ -321,7 +321,7 @@ function initialize(options) {
                     } else {
                         console.error(result.error);
                     }
-                    
+
                     processedCount++;
                     event.sender.send('scan-progress');
 
@@ -371,6 +371,29 @@ function initialize(options) {
             }
         });
 
+        // 自定义歌单持久化
+        const CUSTOM_PLAYLISTS_FILE = path.join(path.dirname(MUSIC_PLAYLIST_FILE), 'custom_playlists.json');
+
+        ipcMain.handle('get-custom-playlists', async () => {
+            try {
+                if (await fs.pathExists(CUSTOM_PLAYLISTS_FILE)) {
+                    return await fs.readJson(CUSTOM_PLAYLISTS_FILE);
+                }
+                return [];
+            } catch (error) {
+                console.error('[Music] Error reading custom playlists:', error);
+                return [];
+            }
+        });
+
+        ipcMain.on('save-custom-playlists', async (event, playlists) => {
+            try {
+                await fs.writeJson(CUSTOM_PLAYLISTS_FILE, playlists, { spaces: 2 });
+            } catch (error) {
+                console.error('[Music] Error saving custom playlists:', error);
+            }
+        });
+
         ipcMain.on('share-file-to-main', (event, filePath) => {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 console.log(`[Music] Forwarding shared file to renderer: ${filePath}`);
@@ -386,7 +409,7 @@ function initialize(options) {
             // A simple sanitizer to remove characters that are invalid in file paths.
             const sanitize = (str) => str.replace(/[\\/:"*?<>|]/g, '_');
             const sanitizedTitle = sanitize(title);
-            
+
             const possiblePaths = [];
             if (artist) {
                 const sanitizedArtist = sanitize(artist);

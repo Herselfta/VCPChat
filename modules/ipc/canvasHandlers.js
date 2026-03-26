@@ -299,14 +299,22 @@ async function handleDeleteCanvasFile(event, filePath) {
 
 async function getCanvasHistory() {
     const files = await fs.readdir(CANVAS_CACHE_DIR);
-    const history = files
+    const historyPromises = files
         .filter(file => SUPPORTED_EXTENSIONS.includes(path.extname(file).toLowerCase()))
-        .map(file => ({
-            path: path.join(CANVAS_CACHE_DIR, file),
-            title: file,
-            isActive: false,
-        }))
-        .sort((a, b) => b.title.localeCompare(a.title)); // Sort by name, newest first
+        .map(async (file) => {
+            const filePath = path.join(CANVAS_CACHE_DIR, file);
+            const stats = await fs.stat(filePath);
+            return {
+                path: filePath,
+                title: file,
+                isActive: false,
+                mtime: stats.mtimeMs,
+            };
+        });
+    
+    const history = await Promise.all(historyPromises);
+    // Sort by modification time, newest first
+    history.sort((a, b) => b.mtime - a.mtime);
     return history;
 }
 

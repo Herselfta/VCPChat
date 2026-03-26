@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VCP PTY Shell</title>
+    <!-- 引入 VCP 核心主题变量 -->
+    <link rel="stylesheet" href="../../../../styles/themes.css">
+    <!-- 引入自定义样式 -->
+    <link rel="stylesheet" href="ShellViewer.css" />
+</head>
+<body>
+    <!-- 自定义标题栏 -->
+    <div id="custom-title-bar">
+        <div class="title-text-container">
+            <span class="title-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
+                </svg>
+            </span>
+            <span class="title">VCP PTY Shell</span>
+        </div>
+        <div class="window-controls">
+            <button class="window-control-btn btn-minimize" title="最小化">
+                <svg viewBox="0 0 10 10"><path d="M0,5H10V6H0Z"/></svg>
+            </button>
+            <button class="window-control-btn btn-maximize" title="最大化">
+                <svg viewBox="0 0 10 10"><path d="M0,0V10H10V0ZM9,9H1V1H9Z"/></svg>
+            </button>
+            <button class="window-control-btn btn-close" title="关闭">
+                <svg viewBox="0 0 10 10"><path d="M0,0L10,10M10,0L0,10" stroke="currentColor" stroke-width="1.2"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- 内容包装器，实现磨砂玻璃效果 -->
+    <div id="content-wrapper">
+        <!-- 静态字符画容器 -->
+        <pre id="ascii-art-container">
+   ███╗   ██╗ ██████╗ ██████╗ ██████╗  █████
+   ████╗  ██║██╔═══██╗██╔══██╗██╔══██╗██╔══██╗
+   ██╔██╗ ██║██║   ██║██████╔╝██║  ██║███████║
+   ██║╚██╗██║██║   ██║██╔══██╗██║  ██║██╔══██║
+   ██║ ╚████║╚██████╔╝██║  ██║██████╔╝██║  ██║
+   ╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝
+         Welcome to V C P  •  v1.1.2
+        <!-- VCP • vcp-pty • v1.1.2 -->
+        </pre>
+        
+        <!-- 终端容器 -->
+        <div id="terminal-container"></div>
+    </div>
+
+    <!-- 状态指示器 -->
+    <div class="status-indicator">
+        <div class="status-left">
+            <span class="status-dot"></span>
+            <span class="status-text">CONNECTED</span>
+        </div>
+        <div class="status-right">
+            <span id="pty-info">SESSION: ACTIVE</span>
+        </div>
+    </div>
+
+    <!-- 命令输入区域 -->
+    <div id="input-area">
+        <span class="shell-prompt">$</span>
+        <textarea id="command-input" placeholder="在这里输入命令... (Enter 执行, Shift+Enter 换行)" rows="1"></textarea>
+        <button id="send-button">执行</button>
+    </div>
+
+    <!-- 快捷键提示 -->
+    <div class="shortcuts-hint">
+        <span class="shortcut"><kbd>Enter</kbd> 执行命令</span>
+        <span class="shortcut"><kbd>Shift+Enter</kbd> 换行</span>
+        <span class="shortcut"><kbd>Ctrl+C</kbd> 复制/中断</span>
+        <span class="shortcut"><kbd>右键</kbd> 复制选中</span>
+    </div>
+
+    <!-- 引入终端逻辑脚本 -->
+    <script src="ShellViewer.js"></script>
+</body>
+</html>

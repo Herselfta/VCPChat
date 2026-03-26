@@ -12,3 +12,8 @@ gevent-websocket
 gevent
 mutagen
 python-dotenv
+pyautogui
+Pillow
+pywin32
+uiautomation
+rapidocr-onnxruntime

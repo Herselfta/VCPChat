@@ -22,6 +22,7 @@ window.chatManager = (() => {
     // Functions from main renderer
     let mainRendererFunctions = {};
     let isCanvasWindowOpen = false; // State to track if the canvas window is open
+    let lastAssistantSuspendAt = 0;
 
 
 
@@ -165,6 +166,31 @@ window.chatManager = (() => {
             });
         }
     }
+
+    function suspendAssistantListenerForTopicLoad(topicId) {
+        if (!topicId || !electronAPI || typeof electronAPI.suspendAssistantListener !== 'function') {
+            return;
+        }
+
+        const now = Date.now();
+        if (now - lastAssistantSuspendAt < 200) {
+            return;
+        }
+
+        const globalSettings = globalSettingsRef && typeof globalSettingsRef.get === 'function'
+            ? globalSettingsRef.get()
+            : null;
+
+        if (!globalSettings || globalSettings.assistantEnabled !== true) {
+            return;
+        }
+
+        lastAssistantSuspendAt = now;
+        const durationMs = 800 + Math.floor(Math.random() * 701);
+        Promise.resolve(electronAPI.suspendAssistantListener(durationMs)).catch((error) => {
+            console.warn('[ChatManager] Failed to suspend assistant listener before topic load:', error);
+        });
+    }
  
     // --- Functions moved from renderer.js ---
  
@@ -270,7 +296,12 @@ window.chatManager = (() => {
             } else {
                 if (itemType === 'agent') {
                     const agentConfig = await electronAPI.getAgentConfig(itemId);
-                    if (agentConfig && (!agentConfig.topics || agentConfig.topics.length === 0)) {
+                    // ⚠️ 检查是否返回错误对象
+                    if (agentConfig && agentConfig.error) {
+                        console.error(`[ChatManager] Failed to get agent config for ${itemId}:`, agentConfig.error);
+                        if (messageRenderer) messageRenderer.renderMessage({ role: 'system', content: `加载助手配置失败: ${agentConfig.error}`, timestamp: Date.now() });
+                        await loadChatHistory(itemId, itemType, null);
+                    } else if (agentConfig && (!agentConfig.topics || agentConfig.topics.length === 0)) {
                         const defaultTopicResult = await electronAPI.createNewTopicForAgent(itemId, "主要对话");
                         if (defaultTopicResult.success) {
                             currentTopicIdRef.set(defaultTopicResult.topicId);
@@ -319,13 +350,20 @@ window.chatManager = (() => {
         }
         
         let currentTopicId = currentTopicIdRef.get();
-        if (currentTopicId !== topicId) {
+        if (currentTopicId === topicId) {
+            return;
+        }
+
+        const currentSelectedItem = currentSelectedItemRef.get();
+        if (!currentSelectedItem || !currentSelectedItem.id || !currentSelectedItem.type) {
+            console.warn('[ChatManager] Ignored selectTopic: no active item selected yet.');
+            return;
+        }
+
+        try {
             currentTopicIdRef.set(topicId);
             if (messageRenderer) messageRenderer.setCurrentTopicId(topicId);
-            
-            const currentSelectedItem = currentSelectedItemRef.get();
-            
-            // Explicitly start watcher for the new topic
+
             const agentConfigForWatcher = currentSelectedItem.config || currentSelectedItem;
             if (electronAPI.watcherStart && agentConfigForWatcher?.agentDataPath) {
                 const historyFilePath = `${agentConfigForWatcher.agentDataPath}\\topics\\${topicId}\\history.json`;
@@ -337,9 +375,19 @@ window.chatManager = (() => {
                 item.classList.toggle('active', isClickedItem);
                 item.classList.toggle('active-topic-glowing', isClickedItem);
             });
+
             await loadChatHistory(currentSelectedItem.id, currentSelectedItem.type, topicId);
             localStorage.setItem(`lastActiveTopic_${currentSelectedItem.id}_${currentSelectedItem.type}`, topicId);
-            _saveLastOpenState(); // Save state when a new topic is selected
+            _saveLastOpenState();
+        } catch (error) {
+            console.error('[ChatManager] Failed to select topic:', error);
+            if (messageRenderer) {
+                messageRenderer.renderMessage({
+                    role: 'system',
+                    content: `打开话题失败: ${error.message}`,
+                    timestamp: Date.now()
+                });
+            }
         }
     }
 
@@ -367,6 +415,8 @@ window.chatManager = (() => {
     }
 
     async function loadChatHistory(itemId, itemType, topicId) {
+        suspendAssistantListenerForTopicLoad(topicId);
+
         if (messageRenderer) messageRenderer.clearChat();
         currentChatHistoryRef.set([]);
     

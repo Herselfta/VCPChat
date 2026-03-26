@@ -192,7 +192,7 @@ try {
     const configPath = path.join(__dirname, 'config.env');
     if (fs.existsSync(configPath)) {
         const configContent = fs.readFileSync(configPath, 'utf-8');
-        
+
         const returnModeMatch = configContent.match(/^POWERSHELL_RETURN_MODE\s*=\s*(delta|full)/m);
         if (returnModeMatch) {
             defaultConfig.returnMode = returnModeMatch[1];
@@ -230,7 +230,7 @@ function intelligentSecurityCheck(command, forbiddenKeywords, authRequiredKeywor
 
     // 预处理命令：移除多余空格，转换为小写
     const normalizedCommand = command.trim().toLowerCase();
-    
+
     // 如果命令为空，直接返回
     if (!normalizedCommand) {
         return result;
@@ -277,14 +277,14 @@ function intelligentSecurityCheck(command, forbiddenKeywords, authRequiredKeywor
     // 检查禁止的关键字
     for (const keyword of forbiddenKeywords) {
         if (!keyword) continue;
-        
+
         const keywordLower = keyword.toLowerCase();
-        
+
         // 1. 首先检查是否在路径中
         const isInPath = detectedPaths.some(path =>
             path.toLowerCase().includes(keywordLower)
         );
-        
+
         if (isInPath) {
             // 如果关键字只在路径中出现，检查是否也在命令部分出现
             if (!commandWithoutPaths.includes(keywordLower)) {
@@ -292,12 +292,12 @@ function intelligentSecurityCheck(command, forbiddenKeywords, authRequiredKeywor
                 continue; // 跳过这个关键字，不视为违规
             }
         }
-        
+
         // 2. 检查命令部分是否包含关键字
         if (commandWithoutPaths.includes(keywordLower)) {
             // 3. 进一步验证：检查关键字是否作为独立的命令或参数出现
             const wordBoundaryPattern = new RegExp(`\\b${keywordLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-            
+
             if (wordBoundaryPattern.test(commandWithoutPaths)) {
                 result.isForbidden = true;
                 result.matchedKeyword = keyword;
@@ -311,14 +311,14 @@ function intelligentSecurityCheck(command, forbiddenKeywords, authRequiredKeywor
     // 检查需要授权的关键字（使用相同的逻辑）
     for (const keyword of authRequiredKeywords) {
         if (!keyword) continue;
-        
+
         const keywordLower = keyword.toLowerCase();
-        
+
         // 1. 首先检查是否在路径中
         const isInPath = detectedPaths.some(path =>
             path.toLowerCase().includes(keywordLower)
         );
-        
+
         if (isInPath) {
             // 如果关键字只在路径中出现，检查是否也在命令部分出现
             if (!commandWithoutPaths.includes(keywordLower)) {
@@ -326,12 +326,12 @@ function intelligentSecurityCheck(command, forbiddenKeywords, authRequiredKeywor
                 continue; // 跳过这个关键字，不需要授权
             }
         }
-        
+
         // 2. 检查命令部分是否包含关键字
         if (commandWithoutPaths.includes(keywordLower)) {
             // 3. 进一步验证：检查关键字是否作为独立的命令或参数出现
             const wordBoundaryPattern = new RegExp(`\\b${keywordLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-            
+
             if (wordBoundaryPattern.test(commandWithoutPaths)) {
                 result.needsAuth = true;
                 result.matchedKeyword = keyword;
@@ -384,7 +384,7 @@ function executeAdminCommand(command) {
             child.stderr.on('data', (data) => {
                 stderrOutput += data.toString('utf-8');
             });
-            
+
             child.on('error', (err) => {
                 childProcesses.delete(child); // 停止跟踪
                 cleanupCallback(); // 清理临时文件
@@ -434,7 +434,7 @@ function executeInteractiveCommand(command) {
 
             const pythonConfirmScript = path.join(__dirname, 'AdminConfirm.py');
             const commandAsBase64 = Buffer.from(command).toString('base64');
-            
+
             // 注意：这里我们直接调用 pythonw.exe，而不是通过 Start-Process -Verb RunAs
             // 这将以当前用户权限运行脚本，弹出一个确认框而不是UAC提权框。
             const child = spawn('pythonw.exe', [
@@ -497,10 +497,10 @@ function createNewPtySession() {
             guiWindow.webContents.send('powershell-clear');
         }
     }
- 
+
     let shell = 'bash';
     let args = [];
- 
+
     if (os.platform() === 'win32') {
         // 优先使用 PowerShell Core (pwsh.exe)，如果不存在则回退到 Windows PowerShell (powershell.exe)
         const pwshPath = path.join(process.env.PROGRAMFILES, 'PowerShell', '7', 'pwsh.exe');
@@ -511,14 +511,14 @@ function createNewPtySession() {
         }
         args = ['-NoLogo'];
     }
- 
+
     ptyProcess = pty.spawn(shell, args, {
         name: 'xterm-color',
         cwd: process.env.USERPROFILE || process.env.HOME,
         env: process.env
     });
     childProcesses.add(ptyProcess);
-    
+
     // 设置 PowerShell 输出为 UTF-8 编码
     ptyProcess.write('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r');
 
@@ -528,7 +528,7 @@ function createNewPtySession() {
         if (isExecutingCommand) {
             return;
         }
-        
+
         if (guiWindow && !guiWindow.isDestroyed()) {
             const dataStr = data.toString('utf-8');
             if (dataStr) {
@@ -585,7 +585,7 @@ function executeSingleCommandInPty(ptyProcess, singleCommand) {
                 if (guiWindow && !guiWindow.isDestroyed() && finalChunk) {
                     guiWindow.webContents.send('powershell-data', finalChunk);
                 }
-                
+
                 // 解析Promise，完成AI工具调用
                 resolve(stripAnsi(commandOutput.trim()));
             } else {
@@ -633,7 +633,7 @@ async function processToolCall(args) {
             defaultConfig.forbiddenCommands,
             defaultConfig.authRequiredCommands
         );
-        
+
         if (securityResult.isForbidden) {
             throw new Error(`执行被阻止：${securityResult.reason}`);
         }
@@ -668,7 +668,9 @@ async function processToolCall(args) {
         }
         const command = commandEntries[0].value;
         const fullCommand = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${command}`;
-        return executeAdminCommand(fullCommand);
+        const output = await executeAdminCommand(fullCommand);
+        const cleanOutput = output.replace(/\r\n/g, '\n').replace(/\r/g, '');
+        return { content: [{ type: 'text', text: `\`\`\`powershell\n${cleanOutput}\n\`\`\`` }] };
     }
 
     // 路径 B: 交互式授权模式
@@ -676,7 +678,9 @@ async function processToolCall(args) {
         const combinedCommand = commandEntries.map(e => e.value).join('; ');
         const fullCommand = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${combinedCommand}`;
         // 注意：此模式下，命令将在新的、非持久化的进程中执行，而不是在PTY会话中。
-        return executeInteractiveCommand(fullCommand);
+        const output = await executeInteractiveCommand(fullCommand);
+        const cleanOutput = output.replace(/\r\n/g, '\n').replace(/\r/g, '');
+        return { content: [{ type: 'text', text: `\`\`\`powershell\n${cleanOutput}\n\`\`\`` }] };
     }
 
     // 路径 C: 标准非管理员会话执行
@@ -707,16 +711,21 @@ async function processToolCall(args) {
     }
 
     // --- 5. 格式化并返回结果 ---
+    let finalOutput = '';
     if (finalReturnMode === 'full') {
-        return deltaOutputs.length > 0 ? deltaOutputs[deltaOutputs.length - 1].output : '';
+        finalOutput = deltaOutputs.length > 0 ? deltaOutputs[deltaOutputs.length - 1].output : '';
     } else { // delta 模式
         if (deltaOutputs.length === 1) {
-            return deltaOutputs[0].output;
+            finalOutput = deltaOutputs[0].output;
+        } else {
+            finalOutput = deltaOutputs.map(res =>
+                `---[Output for: ${res.command}]---\n${res.output}`
+            ).join('\n\n');
         }
-        return deltaOutputs.map(res =>
-            `---[Output for: ${res.command}]---\n${res.output}`
-        ).join('\n\n');
     }
+
+    const cleanOutput = finalOutput.replace(/\r\n/g, '\n').replace(/\r/g, '');
+    return { content: [{ type: 'text', text: `\`\`\`powershell\n${cleanOutput}\n\`\`\`` }] };
 }
 
 /**

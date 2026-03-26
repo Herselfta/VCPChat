@@ -57,6 +57,12 @@ function messageIsFinalized(messageId) {
     return initStatus === 'finalized';
 }
 
+function isThinkingPlaceholderText(text) {
+    if (typeof text !== 'string') return false;
+    const normalized = text.trim();
+    return normalized === '思考中...' || normalized === '思考中' || normalized === 'Thinking...' || normalized === 'thinking...';
+}
+
 /**
  * 🟢 生成当前视图的唯一签名
  */
@@ -603,7 +609,8 @@ export async function startStreamingMessage(message, passedMessageItem = null) {
     
     // 🟢 使用更明确的覆盖逻辑
     const existingText = accumulatedStreamText.get(messageId);
-    const newText = message.content || '';
+    const shouldSkipGroupThinkingSeed = context.isGroupMessage === true && message.isThinking === true;
+    const newText = shouldSkipGroupThinkingSeed ? '' : (message.content || '');
     const shouldOverwrite = !existingText
         || existingText === '思考中...'
         || newText.length > existingText.length;
@@ -615,7 +622,7 @@ export async function startStreamingMessage(message, passedMessageItem = null) {
     // Prepare placeholder for history
     const placeholderForHistory = {
         ...message,
-        content: message.content || '',
+        content: shouldSkipGroupThinkingSeed ? '' : (message.content || ''),
         isThinking: false,
         timestamp: message.timestamp || Date.now(),
         isGroupMessage: context.isGroupMessage,
@@ -846,7 +853,7 @@ export function appendStreamChunk(messageId, chunkData, context) {
     }
 }
 
-export async function finalizeStreamedMessage(messageId, finishReason, context) {
+export async function finalizeStreamedMessage(messageId, finishReason, context, finalPayload = null) {
     // With the global render loop, we no longer need to manually drain the queue here or clear timers.
     // The loop will continue to process chunks until the queue is empty and the message is finalized, then clean itself up.
     if (activeStreamingMessageId === messageId) {
@@ -888,7 +895,22 @@ export async function finalizeStreamedMessage(messageId, finishReason, context) 
     }
     
     // Find and update the message
-    const finalFullText = accumulatedStreamText.get(messageId) || "";
+    const accumulatedText = accumulatedStreamText.get(messageId) || "";
+    const payloadFullResponse = typeof finalPayload?.fullResponse === 'string' ? finalPayload.fullResponse : "";
+    const payloadError = typeof finalPayload?.error === 'string' ? finalPayload.error.trim() : "";
+    const streamedTextIsUsable = accumulatedText.trim() !== "" && !isThinkingPlaceholderText(accumulatedText);
+    const payloadResponseIsUsable = payloadFullResponse.trim() !== "" && !isThinkingPlaceholderText(payloadFullResponse);
+
+    let finalFullText = accumulatedText;
+    if (storedContext.isGroupMessage === true && !streamedTextIsUsable) {
+        if (payloadResponseIsUsable) {
+            finalFullText = payloadFullResponse;
+        } else if (payloadError) {
+            finalFullText = `[错误] ${payloadError}`;
+        } else if (isThinkingPlaceholderText(finalFullText)) {
+            finalFullText = "";
+        }
+    }
     const messageIndex = historyForThisMessage.findIndex(msg => msg.id === messageId);
     
     if (messageIndex === -1) {

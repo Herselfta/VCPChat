@@ -53,7 +53,7 @@ function initialize(options) {
     });
 
     // --- [修正结束] ---
-    
+
     setupHandlers();
 }
 
@@ -92,7 +92,7 @@ function setupHandlers() {
 
             // 读取目录中的所有文件
             const files = await fs.readdir(absolutePath);
-            
+
             // 过滤出 .md 和 .txt 文件
             const presets = [];
             for (const file of files) {
@@ -100,7 +100,7 @@ function setupHandlers() {
                 if (ext === '.md' || ext === '.txt') {
                     const filePath = path.join(absolutePath, file);
                     const stats = await fs.stat(filePath);
-                    
+
                     if (stats.isFile()) {
                         presets.push({
                             name: path.basename(file, ext),
@@ -162,7 +162,7 @@ function setupHandlers() {
     ipcMain.handle('get-active-system-prompt', async (event, agentId) => {
         try {
             const configPath = path.join(AGENT_DIR, agentId, 'config.json');
-            
+
             let config;
             try {
                 // 尝试从 agentHandlers 获取配置（它现在使用了 AgentConfigManager）
@@ -185,7 +185,7 @@ function setupHandlers() {
                 case 'original':
                     systemPrompt = config.originalSystemPrompt || config.systemPrompt || '';
                     break;
-                
+
                 case 'modular':
                     // 格式化积木块
                     if (config.advancedSystemPrompt && typeof config.advancedSystemPrompt === 'object') {
@@ -210,11 +210,11 @@ function setupHandlers() {
                         systemPrompt = config.advancedSystemPrompt;
                     }
                     break;
-                
+
                 case 'preset':
                     systemPrompt = config.presetSystemPrompt || '';
                     break;
-                
+
                 default:
                     systemPrompt = config.systemPrompt || '';
             }
@@ -234,7 +234,7 @@ function setupHandlers() {
             }
 
             const configPath = path.join(AGENT_DIR, agentId, 'config.json');
-            
+
             let config;
             try {
                 const { getAgentConfigById } = require('./agentHandlers');
@@ -248,7 +248,7 @@ function setupHandlers() {
                 }
             }
             config.promptMode = mode;
-            
+
             // 更新 systemPrompt 字段
             let systemPrompt = '';
             switch (mode) {
@@ -279,24 +279,27 @@ function setupHandlers() {
                     systemPrompt = config.presetSystemPrompt || '';
                     break;
             }
-            
+
             config.systemPrompt = systemPrompt;
-            // 使用 IPC 处理器保存，以确保通过 AgentConfigManager
-            const { ipcMain } = require('electron');
-            // 注意：这里我们直接调用内部逻辑或通过 ipcMain.emit 模拟，
-            // 但最稳妥的是直接使用 agentConfigManagerInstance 如果能访问到。
-            // 由于 promptHandlers.js 没拿到 manager 实例，我们暂时使用 fs.writeJson，
-            // 但路径必须修正。
-            await fs.writeJson(configPath, config, { spaces: 2 });
+            // 使用 AgentConfigManager 进行安全的配置更新
+            const { getAgentConfigManager } = require('./agentHandlers');
+            const agentConfigManager = getAgentConfigManager();
+
+            if (agentConfigManager) {
+                await agentConfigManager.writeAgentConfig(agentId, config);
+            } else {
+                console.error(`AgentConfigManager not available, cannot safely save mode change for agent ${agentId}`);
+                return { success: false, error: 'AgentConfigManager 未初始化，无法安全保存模式更改。' };
+            }
 
             console.log(`[PromptHandlers] Programmatically switched agent ${agentId} to mode: ${mode}`);
-            
+
             // 触发渲染进程的设置界面刷新
             if (event.sender && !event.sender.isDestroyed()) {
                 event.sender.send('reload-agent-settings', { agentId });
                 console.log(`[PromptHandlers] Sent reload-agent-settings event to renderer for agent: ${agentId}`);
             }
-            
+
             return {
                 success: true,
                 mode,

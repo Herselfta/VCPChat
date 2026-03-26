@@ -76,12 +76,18 @@ class RAGObserverConfig {
                 const data = JSON.parse(event.data);
                 console.log('DEBUG: [RAG Observer] Received WebSocket Data:', data);
                 
-                // 检查是否为RAG、元思考链或Agent私聊预览的详细信息
-                if (data.type === 'RAG_RETRIEVAL_DETAILS' || data.type === 'META_THINKING_CHAIN' || data.type === 'AGENT_PRIVATE_CHAT_PREVIEW' || data.type === 'AI_MEMO_RETRIEVAL') {
+                // 检查是否为RAG、元思考链、Agent私聊预览或Agent梦境的详细信息
+                if (data.type === 'RAG_RETRIEVAL_DETAILS' ||
+                    data.type === 'META_THINKING_CHAIN' ||
+                    data.type === 'AGENT_PRIVATE_CHAT_PREVIEW' ||
+                    data.type === 'AI_MEMO_RETRIEVAL' ||
+                    data.type === 'DailyNote' ||
+                    data.source === 'AgentAssistant' ||
+                    (data.type && data.type.startsWith('AGENT_DREAM_'))) {
                     if (window.startSpectrumAnimation) {
                         window.startSpectrumAnimation(3000); // 动画持续3秒
                     }
-                    displayRagInfo(data); // displayRagInfo内部会处理这两种类型
+                    displayRagInfo(data); // displayRagInfo内部会处理这些类型
                 }
             } catch (e) {
                 console.error('解析消息失败:', e);

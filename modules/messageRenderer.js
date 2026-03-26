@@ -41,32 +41,34 @@ const MERMAID_CODE_REGEX = /<code.*?>\s*(flowchart|graph|mermaid)\s+([\s\S]*?)<\
 const MERMAID_FENCE_REGEX = /```(mermaid|flowchart|graph)\n([\s\S]*?)```/g;
 const CODE_FENCE_REGEX = /```\w*([\s\S]*?)```/g;
 const THOUGHT_CHAIN_REGEX = /\[--- VCP元思考链(?::\s*"([^"]*)")?\s*---\]([\s\S]*?)\[--- 元思考链结束 ---\]/gs;
+const CONVENTIONAL_THOUGHT_REGEX = /<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi;
+const ROLE_DIVIDER_REGEX = /<<<\[(END_)?ROLE_DIVIDE_(SYSTEM|ASSISTANT|USER)\]>>>/g;
 
 
 // --- Enhanced Rendering Styles (from UserScript) ---
 function injectEnhancedStyles() {
-   try {
-       // 检查是否已经通过 ID 或 href 引入了该样式表
-       const existingStyleElement = document.getElementById('vcp-enhanced-ui-styles');
-       if (existingStyleElement) return;
+    try {
+        // 检查是否已经通过 ID 或 href 引入了该样式表
+        const existingStyleElement = document.getElementById('vcp-enhanced-ui-styles');
+        if (existingStyleElement) return;
 
-       const links = document.getElementsByTagName('link');
-       for (let i = 0; i < links.length; i++) {
-           if (links[i].href && links[i].href.includes('messageRenderer.css')) {
-               return;
-           }
-       }
+        const links = document.getElementsByTagName('link');
+        for (let i = 0; i < links.length; i++) {
+            if (links[i].href && links[i].href.includes('messageRenderer.css')) {
+                return;
+            }
+        }
 
-       // 如果没有引入，则尝试从根路径引入（仅对根目录 HTML 有效）
-       const linkElement = document.createElement('link');
-       linkElement.id = 'vcp-enhanced-ui-styles';
-       linkElement.rel = 'stylesheet';
-       linkElement.type = 'text/css';
-       linkElement.href = 'styles/messageRenderer.css';
-       document.head.appendChild(linkElement);
-   } catch (error) {
-       console.error('VCPSub Enhanced UI: Failed to load external styles:', error);
-   }
+        // 如果没有引入，则尝试从根路径引入（仅对根目录 HTML 有效）
+        const linkElement = document.createElement('link');
+        linkElement.id = 'vcp-enhanced-ui-styles';
+        linkElement.rel = 'stylesheet';
+        linkElement.type = 'text/css';
+        linkElement.href = 'styles/messageRenderer.css';
+        document.head.appendChild(linkElement);
+    } catch (error) {
+        console.error('VCPSub Enhanced UI: Failed to load external styles:', error);
+    }
 }
 
 // --- Core Logic ---
@@ -110,7 +112,7 @@ async function renderMermaidDiagrams(container) {
                 let decodedCode = decodeURIComponent(code);
                 // 修复 AI 常用的“智能字符”导致的 Mermaid 语法错误
                 decodedCode = decodedCode.replace(/[—–－]/g, '--');
-                
+
                 placeholder.textContent = decodedCode;
                 placeholder.classList.remove('mermaid-placeholder');
                 placeholder.classList.add('mermaid');
@@ -127,7 +129,7 @@ async function renderMermaidDiagrams(container) {
     if (elementsToRender.length > 0 && typeof mermaid !== 'undefined') {
         // Initialize mermaid if it hasn't been already
         mermaid.initialize({ startOnLoad: false });
-        
+
         // 逐个渲染以防止单个图表错误导致所有图表显示错误
         for (const el of elementsToRender) {
             try {
@@ -166,12 +168,12 @@ function applyRegexRule(text, rule) {
                 regex = new RegExp(rule.findPattern, 'g');
             }
         }
-        
+
         if (!regex) {
             console.error('无法解析正则表达式:', rule.findPattern);
             return text;
         }
-        
+
         // 应用替换（如果没有替换内容，则默认替换为空字符串）
         return text.replace(regex, rule.replaceWith || '');
     } catch (error) {
@@ -194,27 +196,27 @@ function applyFrontendRegexRules(text, rules, role, depth) {
     }
 
     let processedText = text;
-    
+
     rules.forEach(rule => {
         // 检查是否应该应用此规则
-        
+
         // 1. 检查是否应用于前端
         if (!rule.applyToFrontend) return;
-        
+
         // 2. 检查角色
         const shouldApplyToRole = rule.applyToRoles && rule.applyToRoles.includes(role);
         if (!shouldApplyToRole) return;
-        
+
         // 3. 检查深度（-1 表示无限制）
         const minDepthOk = rule.minDepth === undefined || rule.minDepth === -1 || depth >= rule.minDepth;
         const maxDepthOk = rule.maxDepth === undefined || rule.maxDepth === -1 || depth <= rule.maxDepth;
-        
+
         if (!minDepthOk || !maxDepthOk) return;
-        
+
         // 应用规则
         processedText = applyRegexRule(processedText, rule);
     });
-    
+
     return processedText;
 }
 
@@ -222,10 +224,22 @@ function applyFrontendRegexRules(text, rules, role, depth) {
  * Finds special VCP blocks (Tool Requests, Daily Notes) and transforms them
  * directly into styled HTML divs, bypassing the need for markdown code fences.
  * @param {string} text The text content.
+ * @param {Map} [codeBlockMap] Map of code block placeholders to their original content.
  * @returns {string} The processed text with special blocks as HTML.
  */
-function transformSpecialBlocks(text) {
+function transformSpecialBlocks(text, codeBlockMap) {
     let processed = text;
+
+    const restoreBlocks = (textStr) => {
+        if (!textStr || !codeBlockMap) return textStr;
+        let res = textStr;
+        for (const [placeholder, block] of codeBlockMap.entries()) {
+            if (res.includes(placeholder)) {
+                res = res.replace(placeholder, () => block);
+            }
+        }
+        return res;
+    };
 
     // Process VCP Tool Results
     processed = processed.replace(TOOL_RESULT_REGEX, (match, rawContent) => {
@@ -236,7 +250,7 @@ function transformSpecialBlocks(text) {
         let status = 'Unknown Status';
         const details = [];
         let otherContent = [];
-        
+
         let currentKey = null;
         let currentValue = [];
 
@@ -296,16 +310,16 @@ function transformSpecialBlocks(text) {
             } else if (isMarkdownField && mainRendererReferences.markedInstance) {
                 try {
                     // Use marked for markdown fields
-                    processedValue = mainRendererReferences.markedInstance.parse(value);
+                    processedValue = mainRendererReferences.markedInstance.parse(restoreBlocks(value));
                 } catch (e) {
                     console.error('Failed to parse markdown in tool result', e);
-                    processedValue = escapeHtml(value);
+                    processedValue = escapeHtml(restoreBlocks(value));
                 }
             } else {
                 const urlRegex = /(https?:\/\/[^\s]+)/g;
-                processedValue = escapeHtml(value);
+                processedValue = escapeHtml(restoreBlocks(value));
                 processedValue = processedValue.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
-                
+
                 if (key === '返回内容') {
                     processedValue = processedValue.replace(/###(.*?)###/g, '<strong>$1</strong>');
                 }
@@ -324,13 +338,13 @@ function transformSpecialBlocks(text) {
             let processedFooter;
             if (mainRendererReferences.markedInstance) {
                 try {
-                    processedFooter = mainRendererReferences.markedInstance.parse(footerText);
+                    processedFooter = mainRendererReferences.markedInstance.parse(restoreBlocks(footerText));
                 } catch (e) {
                     console.error('Failed to parse markdown in tool result footer', e);
-                    processedFooter = `<pre>${escapeHtml(footerText)}</pre>`;
+                    processedFooter = `<pre>${escapeHtml(restoreBlocks(footerText))}</pre>`;
                 }
             } else {
-                processedFooter = `<pre>${escapeHtml(footerText)}</pre>`;
+                processedFooter = `<pre>${escapeHtml(restoreBlocks(footerText))}</pre>`;
             }
             html += `<div class="vcp-tool-result-footer">${processedFooter}</div>`;
         }
@@ -345,7 +359,7 @@ function transformSpecialBlocks(text) {
     processed = processed.replace(TOOL_REGEX, (match, content) => {
         // Check if this is a DailyNote tool call with the 'create' command
         const isDailyNoteCreate = /tool_name:\s*「始」\s*DailyNote\s*「末」/.test(content) &&
-                                  /command:\s*「始」\s*create\s*「末」/.test(content);
+            /command:\s*「始」\s*create\s*「末」/.test(content);
 
         if (isDailyNoteCreate) {
             // --- It's a DailyNote Tool, render it as a diary bubble ---
@@ -368,7 +382,7 @@ function transformSpecialBlocks(text) {
                 html += `<span class="diary-date">${escapeHtml(date)}</span>`;
             }
             html += `</div>`;
-            
+
             if (maid) {
                 html += `<div class="diary-maid-info">`;
                 html += `<span class="diary-maid-label">Maid:</span> `;
@@ -379,12 +393,12 @@ function transformSpecialBlocks(text) {
             let processedDiaryContent;
             if (mainRendererReferences.markedInstance) {
                 try {
-                    processedDiaryContent = mainRendererReferences.markedInstance.parse(diaryContent);
+                    processedDiaryContent = mainRendererReferences.markedInstance.parse(restoreBlocks(diaryContent));
                 } catch (e) {
-                    processedDiaryContent = escapeHtml(diaryContent);
+                    processedDiaryContent = escapeHtml(restoreBlocks(diaryContent));
                 }
             } else {
-                processedDiaryContent = escapeHtml(diaryContent);
+                processedDiaryContent = escapeHtml(restoreBlocks(diaryContent));
             }
             html += `<div class="diary-content">${processedDiaryContent}</div>`;
             html += `</div>`;
@@ -406,14 +420,14 @@ function transformSpecialBlocks(text) {
                 }
             }
 
-            const escapedFullContent = escapeHtml(content);
+            const escapedFullContent = escapeHtml(restoreBlocks(content));
             return `<div class="vcp-tool-use-bubble">` +
-                   `<div class="vcp-tool-summary">` +
-                   `<span class="vcp-tool-label">VCP-ToolUse:</span> ` +
-                   `<span class="vcp-tool-name-highlight">${escapeHtml(toolName)}</span>` +
-                   `</div>` +
-                   `<div class="vcp-tool-details"><pre>${escapedFullContent}</pre></div>` +
-                   `</div>`;
+                `<div class="vcp-tool-summary">` +
+                `<span class="vcp-tool-label">VCP-ToolUse:</span> ` +
+                `<span class="vcp-tool-name-highlight">${escapeHtml(toolName)}</span>` +
+                `</div>` +
+                `<div class="vcp-tool-details"><pre>${escapedFullContent}</pre></div>` +
+                `</div>`;
         }
     });
 
@@ -440,7 +454,7 @@ function transformSpecialBlocks(text) {
             html += `<span class="diary-date">${escapeHtml(date)}</span>`;
         }
         html += `</div>`;
-        
+
         if (maid) {
             html += `<div class="diary-maid-info">`;
             html += `<span class="diary-maid-label">Maid:</span> `;
@@ -451,12 +465,12 @@ function transformSpecialBlocks(text) {
         let processedDiaryContent;
         if (mainRendererReferences.markedInstance) {
             try {
-                processedDiaryContent = mainRendererReferences.markedInstance.parse(diaryContent);
+                processedDiaryContent = mainRendererReferences.markedInstance.parse(restoreBlocks(diaryContent));
             } catch (e) {
-                processedDiaryContent = escapeHtml(diaryContent);
+                processedDiaryContent = escapeHtml(restoreBlocks(diaryContent));
             }
         } else {
-            processedDiaryContent = escapeHtml(diaryContent);
+            processedDiaryContent = escapeHtml(restoreBlocks(diaryContent));
         }
         html += `<div class="diary-content">${processedDiaryContent}</div>`;
         html += `</div>`;
@@ -465,10 +479,10 @@ function transformSpecialBlocks(text) {
     });
 
     // Process VCP Thought Chains
-    processed = processed.replace(THOUGHT_CHAIN_REGEX, (match, theme, rawContent) => {
+    const renderThoughtChain = (theme, rawContent) => {
         const displayTheme = theme ? theme.trim() : "元思考链";
         const content = rawContent.trim();
-        const escapedContent = escapeHtml(content);
+        const escapedContent = escapeHtml(restoreBlocks(content));
 
         let html = `<div class="vcp-thought-chain-bubble collapsible">`;
         html += `<div class="vcp-thought-chain-header">`;
@@ -478,11 +492,11 @@ function transformSpecialBlocks(text) {
         html += `</div>`;
 
         html += `<div class="vcp-thought-chain-collapsible-content">`;
-        
+
         let processedContent;
         if (mainRendererReferences.markedInstance) {
             try {
-                processedContent = mainRendererReferences.markedInstance.parse(content);
+                processedContent = mainRendererReferences.markedInstance.parse(restoreBlocks(content));
             } catch (e) {
                 processedContent = `<pre>${escapedContent}</pre>`;
             }
@@ -495,6 +509,30 @@ function transformSpecialBlocks(text) {
         html += `</div>`; // End of vcp-thought-chain-bubble
 
         return html;
+    };
+
+    processed = processed.replace(THOUGHT_CHAIN_REGEX, (match, theme, rawContent) => {
+        return renderThoughtChain(theme, rawContent);
+    });
+
+    // Process Conventional Thought Chains (<think>...</think>)
+    processed = processed.replace(CONVENTIONAL_THOUGHT_REGEX, (match, rawContent) => {
+        return renderThoughtChain("思维链", rawContent);
+    });
+
+    // Process Role Dividers
+    processed = processed.replace(ROLE_DIVIDER_REGEX, (match, isEnd, role) => {
+        const isEndMarker = !!isEnd;
+        const roleLower = role.toLowerCase();
+
+        let label = '';
+        if (roleLower === 'system') label = 'System';
+        else if (roleLower === 'assistant') label = 'Assistant';
+        else if (roleLower === 'user') label = 'User';
+
+        const actionText = isEndMarker ? '结束' : '起始';
+
+        return `<div class="vcp-role-divider role-${roleLower} type-${isEndMarker ? 'end' : 'start'}"><span class="divider-text">角色分界: ${label} [${actionText}]</span></div>`;
     });
 
     return processed;
@@ -537,14 +575,14 @@ function processAndInjectScopedCss(content, scopeId) {
     if (cssContent.length > 0) {
         try {
             const scopedCss = contentProcessor.scopeCss(cssContent, scopeId);
-            
+
             const styleElement = document.createElement('style');
             styleElement.type = 'text/css';
             styleElement.setAttribute('data-vcp-scope-id', scopeId);
             styleElement.textContent = scopedCss;
             document.head.appendChild(styleElement);
             styleInjected = true;
-            
+
             console.debug(`[ScopedCSS] Injected scoped styles for ID: #${scopeId}`);
         } catch (error) {
             console.error(`[ScopedCSS] Failed to scope or inject CSS for ID: ${scopeId}`, error);
@@ -585,22 +623,22 @@ function ensureHtmlFenced(text) {
     const START_MARKER = '「始」';
     const END_MARKER = '「末」';
     let searchStart = 0;
-    
+
     while (true) {
         const startPos = text.indexOf(START_MARKER, searchStart);
         if (startPos === -1) break;
-        
+
         const endPos = text.indexOf(END_MARKER, startPos + START_MARKER.length);
         if (endPos === -1) {
             // 未闭合的「始」，保护到文本末尾（流式传输场景）
             protectedRanges.push({ start: startPos, end: text.length });
             break;
         }
-        
+
         protectedRanges.push({ start: startPos, end: endPos + END_MARKER.length });
         searchStart = endPos + END_MARKER.length;
     }
-    
+
     // 🟢 检查位置是否在保护区域内
     const isProtected = (index) => {
         return protectedRanges.some(range => index >= range.start && index < range.end);
@@ -608,7 +646,7 @@ function ensureHtmlFenced(text) {
 
     let result = '';
     let lastIndex = 0;
-    
+
     while (true) {
         const startIndex = text.toLowerCase().indexOf(doctypeTag.toLowerCase(), lastIndex);
 
@@ -617,7 +655,7 @@ function ensureHtmlFenced(text) {
         if (startIndex === -1) break;
 
         const endIndex = text.toLowerCase().indexOf(htmlCloseTag.toLowerCase(), startIndex + doctypeTag.length);
-        
+
         if (endIndex === -1) {
             result += text.substring(startIndex);
             break;
@@ -663,12 +701,12 @@ function deIndentHtml(text) {
             inFence = !inFence;
             return line;
         }
-        
+
         // 🟢 新增：如果行内包含 <img>，不要拆分它
         if (!inFence && line.includes('<img')) {
             return line; // 保持原样
         }
-        
+
         if (!inFence && /^\s+<(!|[a-zA-Z])/.test(line)) {
             return line.trimStart();
         }
@@ -698,7 +736,7 @@ function calculateDepthByTurns(messageId, history) {
         }
     }
     turns.reverse(); // ✅ 最后反转一次
-    
+
     const turnIndex = turns.findIndex(t =>
         (t.assistant?.id === messageId) || (t.user?.id === messageId)
     );
@@ -723,10 +761,10 @@ function preprocessFullContent(text, settings = {}, messageRole = 'assistant', d
     // 或者确保 transformSpecialBlocks 能够处理未转义的原始文本。
     // 实际上，processStartEndMarkers 在流式传输中非常重要。
     // 我们将其移动到 transformSpecialBlocks 之后，或者只对非工具块内容应用。
-    
+
     // 暂时保留，但我们需要意识到双重转义风险。
     text = contentProcessor.processStartEndMarkers(text);
-    
+
     // 一次性处理 Mermaid（合并两种情况）
     text = text.replace(MERMAID_CODE_REGEX, (match, lang, code) => {
         const tempEl = document.createElement('textarea');
@@ -734,7 +772,7 @@ function preprocessFullContent(text, settings = {}, messageRole = 'assistant', d
         const encodedCode = encodeURIComponent(tempEl.value.trim());
         return `<div class="mermaid-placeholder" data-mermaid-code="${encodedCode}"></div>`;
     });
-    
+
     text = text.replace(MERMAID_FENCE_REGEX, (match, lang, code) => {
         const encodedCode = encodeURIComponent(code.trim());
         return `<div class="mermaid-placeholder" data-mermaid-code="${encodedCode}"></div>`;
@@ -744,14 +782,14 @@ function preprocessFullContent(text, settings = {}, messageRole = 'assistant', d
     // 这样 deIndentMisinterpretedCodeBlocks 才能正确识别代码围栏
     text = contentProcessor.deIndentMisinterpretedCodeBlocks(text);
     text = deIndentHtml(text);
-    
+
     // 保护代码块（优化：只在需要时创建 Map）
     let codeBlockMap = null;
     let placeholderId = 0;
-    
+
     // Use a lookahead to test without consuming the match
     const hasCodeBlocks = /```/.test(text);
-    
+
     if (hasCodeBlocks) {
         codeBlockMap = new Map();
         text = text.replace(CODE_FENCE_REGEX, (match) => {
@@ -764,9 +802,9 @@ function preprocessFullContent(text, settings = {}, messageRole = 'assistant', d
 
     // The order of the remaining operations is critical.
     text = contentProcessor.deIndentToolRequestBlocks(text);
-    text = transformSpecialBlocks(text);
+    text = transformSpecialBlocks(text, codeBlockMap);
     text = ensureHtmlFenced(text);
-    
+
     // 批量应用内容处理器（减少函数调用）
     text = contentProcessor.applyContentProcessors(text);
 
@@ -787,7 +825,7 @@ function preprocessFullContent(text, settings = {}, messageRole = 'assistant', d
  */
 function fixEmoticonUrlsInMarkdown(text) {
     if (!text || typeof text !== 'string') return text;
-    
+
     // 1. 修复 Markdown 图片语法: ![alt](url)
     text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, url) => {
         if (emoticonUrlFixer && emoticonUrlFixer.fixEmoticonUrl) {
@@ -799,7 +837,7 @@ function fixEmoticonUrlsInMarkdown(text) {
         }
         return match;
     });
-    
+
     // 2. 修复 HTML img 标签: <img src="url" ...>
     text = text.replace(/<img([^>]*?)src=["']([^"']+)["']([^>]*?)>/gi, (match, before, url, after) => {
         if (emoticonUrlFixer && emoticonUrlFixer.fixEmoticonUrl) {
@@ -811,7 +849,7 @@ function fixEmoticonUrlsInMarkdown(text) {
         }
         return match;
     });
-    
+
     return text;
 }
 
@@ -843,22 +881,22 @@ function fixEmoticonUrlsInMarkdown(text) {
 
 
 let mainRendererReferences = {
-    currentChatHistoryRef: { get: () => [], set: () => {} }, // Ref to array
-    currentSelectedItemRef: { get: () => ({ id: null, type: null, name: null, avatarUrl: null, config: null }), set: () => {} }, // Ref to object
-    currentTopicIdRef: { get: () => null, set: () => {} }, // Ref to string/null
-    globalSettingsRef: { get: () => ({ userName: '用户', userAvatarUrl: 'assets/default_user_avatar.png', userAvatarCalculatedColor: null }), set: () => {} }, // Ref to object
+    currentChatHistoryRef: { get: () => [], set: () => { } }, // Ref to array
+    currentSelectedItemRef: { get: () => ({ id: null, type: null, name: null, avatarUrl: null, config: null }), set: () => { } }, // Ref to object
+    currentTopicIdRef: { get: () => null, set: () => { } }, // Ref to string/null
+    globalSettingsRef: { get: () => ({ userName: '用户', userAvatarUrl: 'assets/default_user_avatar.png', userAvatarCalculatedColor: null }), set: () => { } }, // Ref to object
 
     chatMessagesDiv: null,
     electronAPI: null,
     markedInstance: null,
     uiHelper: {
-        scrollToBottom: () => {},
-        openModal: () => {},
-        autoResizeTextarea: () => {},
+        scrollToBottom: () => { },
+        openModal: () => { },
+        autoResizeTextarea: () => { },
         // ... other uiHelper functions ...
     },
     summarizeTopicFromMessages: async () => "",
-    handleCreateBranch: () => {},
+    handleCreateBranch: () => { },
     // activeStreamingMessageId: null, // ID of the message currently being streamed - REMOVED
 };
 
@@ -875,14 +913,14 @@ function removeMessageById(messageId, saveHistory = false) {
         visibilityOptimizer.unobserveMessage(item);
         item.remove();
     }
-    
+
     const currentChatHistoryArray = mainRendererReferences.currentChatHistoryRef.get();
     const index = currentChatHistoryArray.findIndex(m => m.id === messageId);
-    
+
     if (index > -1) {
         currentChatHistoryArray.splice(index, 1);
         mainRendererReferences.currentChatHistoryRef.set([...currentChatHistoryArray]);
-        
+
         if (saveHistory) {
             const currentSelectedItemVal = mainRendererReferences.currentSelectedItemRef.get();
             const currentTopicIdVal = mainRendererReferences.currentTopicIdRef.get();
@@ -908,11 +946,11 @@ function clearChat() {
             }
             visibilityOptimizer.unobserveMessage(item);
         });
-        
+
         // 🟢 清理所有注入的 scoped CSS
         document.querySelectorAll('style[data-vcp-scope-id]').forEach(el => el.remove());
         document.querySelectorAll('style[data-chat-scope-id]').forEach(el => el.remove());
-        
+
         mainRendererReferences.chatMessagesDiv.innerHTML = '';
     }
     mainRendererReferences.currentChatHistoryRef.set([]); // Clear the history array via its ref
@@ -972,11 +1010,11 @@ function initializeMessageRenderer(refs) {
     mainRendererReferences.chatMessagesDiv.addEventListener('contextmenu', (e) => {
         const messageItem = e.target.closest('.message-item');
         if (!messageItem) return;
-        
+
         const messageId = messageItem.dataset.messageId;
         const message = mainRendererReferences.currentChatHistoryRef.get()
             .find(m => m.id === messageId);
-        
+
         if (message && (message.role === 'assistant' || message.role === 'user')) {
             e.preventDefault();
             contextMenu.showContextMenu(e, messageItem, message);
@@ -986,22 +1024,22 @@ function initializeMessageRenderer(refs) {
     // Delegated middle mouse button click
     mainRendererReferences.chatMessagesDiv.addEventListener('mousedown', (e) => {
         if (e.button !== 1) return; // 只处理中键
-        
+
         const messageItem = e.target.closest('.message-item');
         if (!messageItem) return;
-        
+
         const messageId = messageItem.dataset.messageId;
         const message = mainRendererReferences.currentChatHistoryRef.get()
             .find(m => m.id === messageId);
-        
+
         if (message && (message.role === 'assistant' || message.role === 'user')) {
             e.preventDefault();
             e.stopPropagation();
-            
+
             const globalSettings = mainRendererReferences.globalSettingsRef.get();
             if (globalSettings.enableMiddleClickQuickAction) {
                 middleClickHandler.startMiddleClickTimer(e, messageItem, message, globalSettings.middleClickQuickAction);
-                
+
                 if (globalSettings.enableMiddleClickAdvanced) {
                     const delay = Math.max(1000, globalSettings.middleClickAdvancedDelay || 1000);
                     middleClickHandler.startAdvancedMiddleClickTimer(e, messageItem, message, globalSettings);
@@ -1109,7 +1147,7 @@ function setUserAvatar(avatarUrl) { // For the user's global avatar
     if (oldUrl && oldUrl !== (avatarUrl || 'assets/default_user_avatar.png')) {
         avatarColorCache.delete(oldUrl.split('?')[0]);
     }
-    mainRendererReferences.globalSettingsRef.set({...globalSettings, userAvatarUrl: avatarUrl || 'assets/default_user_avatar.png' });
+    mainRendererReferences.globalSettingsRef.set({ ...globalSettings, userAvatarUrl: avatarUrl || 'assets/default_user_avatar.png' });
 }
 
 function setCurrentItemAvatarColor(color) { // Renamed from setCurrentAgentAvatarColor
@@ -1118,7 +1156,7 @@ function setCurrentItemAvatarColor(color) { // Renamed from setCurrentAgentAvata
 
 function setUserAvatarColor(color) { // For the user's global avatar
     const globalSettings = mainRendererReferences.globalSettingsRef.get();
-    mainRendererReferences.globalSettingsRef.set({...globalSettings, userAvatarCalculatedColor: color });
+    mainRendererReferences.globalSettingsRef.set({ ...globalSettings, userAvatarCalculatedColor: color });
 }
 
 
@@ -1140,7 +1178,7 @@ async function renderAttachments(message, contentDiv) {
                     const currentTheme = document.body.classList.contains('light-theme') ? 'light' : 'dark';
                     electronAPI.openImageViewer({ src: att.src, title: att.name, theme: currentTheme });
                 };
-                 attachmentElement.addEventListener('contextmenu', (e) => { // Use attachmentElement here
+                attachmentElement.addEventListener('contextmenu', (e) => { // Use attachmentElement here
                     e.preventDefault(); e.stopPropagation();
                     electronAPI.showImageContextMenu(att.src);
                 });
@@ -1161,7 +1199,7 @@ async function renderAttachments(message, contentDiv) {
                 attachmentElement.onclick = (e) => {
                     e.preventDefault();
                     if (electronAPI.sendOpenExternalLink && att.src.startsWith('file://')) {
-                         electronAPI.sendOpenExternalLink(att.src);
+                        electronAPI.sendOpenExternalLink(att.src);
                     } else {
                         console.warn("Cannot open local file attachment, API missing or path not a file URI:", att.src);
                     }
@@ -1214,13 +1252,13 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
     let customNameColor = null; // 自定义名称颜色
     let shouldApplyColorToName = false; // 是否应该将头像颜色也应用到名称
     let useThemeColors = false; // 是否使用主题颜色
-    
+
     if (message.role === 'user') {
         avatarColorToUse = globalSettings.userAvatarCalculatedColor;
         avatarUrlToUse = globalSettings.userAvatarUrl;
         // 检查用户是否启用了"会话中使用主题颜色"
         useThemeColors = globalSettings.userUseThemeColorsInChat || false;
-        
+
         if (!useThemeColors) {
             // 用户消息：获取自定义颜色（仅在未启用主题颜色时应用）
             customBorderColor = globalSettings.userAvatarBorderColor;
@@ -1245,11 +1283,11 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
             }
         } else if (currentSelectedItem) {
             avatarColorToUse = currentSelectedItem.config?.avatarCalculatedColor
-                            || currentSelectedItem.avatarCalculatedColor
-                            || currentSelectedItem.config?.avatarColor
-                            || currentSelectedItem.avatarColor;
+                || currentSelectedItem.avatarCalculatedColor
+                || currentSelectedItem.config?.avatarColor
+                || currentSelectedItem.avatarColor;
             avatarUrlToUse = currentSelectedItem.avatarUrl;
-            
+
             // 非群组消息，获取当前Agent的设置
             const agentConfig = currentSelectedItem.config || currentSelectedItem;
             if (agentConfig) {
@@ -1281,13 +1319,13 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
             textToRender = message.content.text;
         } else if (message.content === null || message.content === undefined) {
             textToRender = ""; // Handle null or undefined content gracefully
-             console.warn('[MessageRenderer] message.content is null or undefined for message ID:', message.id);
+            console.warn('[MessageRenderer] message.content is null or undefined for message ID:', message.id);
         } else {
             // Fallback for other unexpected object structures, log and use a placeholder
             console.warn('[MessageRenderer] Unexpected message.content type. Message ID:', message.id, 'Content:', JSON.stringify(message.content));
             textToRender = "[消息内容格式异常]";
         }
-        
+
         // Apply special formatting for user button clicks
         if (message.role === 'user') {
             textToRender = transformUserButtonClick(textToRender);
@@ -1301,10 +1339,10 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
                 codeBlocksForStyleProtection.push(match);
                 return placeholder;
             });
-            
+
             // 现在只会匹配代码块外的 <style> 标签
             const { processedContent: contentWithoutStyles } = processAndInjectScopedCss(textWithProtectedBlocks, scopeId);
-            
+
             // 恢复代码块
             textToRender = contentWithoutStyles;
             codeBlocksForStyleProtection.forEach((block, i) => {
@@ -1313,7 +1351,7 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
             });
             // --- 修复结束 ---
         }
-        
+
         // --- 按“对话轮次”计算深度 ---
         // 如果是新消息，它此时还不在 history 数组里，先临时加进去计算
         const historyForDepthCalc = currentChatHistory.some(m => m.id === message.id)
@@ -1333,63 +1371,63 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
 
         const processedContent = preprocessFullContent(textToRender, globalSettings, message.role, depth);
         let rawHtml = markedInstance.parse(processedContent);
-        
+
         // 修复：清理 Markdown 解析器可能生成的损坏的 SVG viewBox 属性
         // 错误 "Unexpected end of attribute" 表明 viewBox 的值不完整, 例如 "0 "
         rawHtml = rawHtml.replace(/viewBox="0 "/g, 'viewBox="0 0 24 24"');
-        
-            // Synchronously set the base HTML content
-            const finalHtml = rawHtml;
-            contentDiv.innerHTML = finalHtml;
 
-            // Define the post-processing logic as a function.
-            // This allows us to control WHEN it gets executed.
-            const runPostRenderProcessing = async () => {
-                // This function should only be called when messageItem is connected to the DOM.
-                
-                // Process images, attachments, and synchronous content first.
-                setContentAndProcessImages(contentDiv, finalHtml, message.id);
-                renderAttachments(message, contentDiv);
-                contentProcessor.processRenderedContent(contentDiv, globalSettings);
-                await renderMermaidDiagrams(contentDiv); // Render mermaid diagrams
+        // Synchronously set the base HTML content
+        const finalHtml = rawHtml;
+        contentDiv.innerHTML = finalHtml;
 
-                // Defer TreeWalker-based highlighters with a hardcoded delay to ensure the DOM is stable.
-                setTimeout(() => {
-                    if (contentDiv && contentDiv.isConnected) {
-                        contentProcessor.highlightAllPatternsInMessage(contentDiv);
-                    }
-                }, 0);
+        // Define the post-processing logic as a function.
+        // This allows us to control WHEN it gets executed.
+        const runPostRenderProcessing = async () => {
+            // This function should only be called when messageItem is connected to the DOM.
 
-                // Finally, process any animations and execute scripts/3D scenes.
-                processAnimationsInContent(contentDiv);
-            };
+            // Process images, attachments, and synchronous content first.
+            setContentAndProcessImages(contentDiv, finalHtml, message.id);
+            renderAttachments(message, contentDiv);
+            contentProcessor.processRenderedContent(contentDiv, globalSettings);
+            await renderMermaidDiagrams(contentDiv); // Render mermaid diagrams
 
-            // If we are appending directly to the DOM, schedule the processing immediately.
-            if (appendToDom) {
-                // We still use requestAnimationFrame to ensure the element is painted before we process it.
-                requestAnimationFrame(() => runPostRenderProcessing());
-            } else {
-                // If not, attach the processing function to the element itself.
-                // The caller (e.g., a batch renderer) will be responsible for executing it
-                // AFTER the element has been attached to the DOM.
-                messageItem._vcp_process = () => runPostRenderProcessing();
-            }
+            // Defer TreeWalker-based highlighters with a hardcoded delay to ensure the DOM is stable.
+            setTimeout(() => {
+                if (contentDiv && contentDiv.isConnected) {
+                    contentProcessor.highlightAllPatternsInMessage(contentDiv);
+                }
+            }, 0);
+
+            // Finally, process any animations and execute scripts/3D scenes.
+            processAnimationsInContent(contentDiv);
+        };
+
+        // If we are appending directly to the DOM, schedule the processing immediately.
+        if (appendToDom) {
+            // We still use requestAnimationFrame to ensure the element is painted before we process it.
+            requestAnimationFrame(() => runPostRenderProcessing());
+        } else {
+            // If not, attach the processing function to the element itself.
+            // The caller (e.g., a batch renderer) will be responsible for executing it
+            // AFTER the element has been attached to the DOM.
+            messageItem._vcp_process = () => runPostRenderProcessing();
         }
-    
+    }
+
     // 然后应用颜色（现在 messageItem.isConnected 是 true）
     if ((message.role === 'user' || message.role === 'assistant') && avatarImg && senderNameDiv) {
         const applyColorToElements = (colorStr) => {
             if (colorStr) {
                 console.debug(`[DEBUG] Applying color ${colorStr} to message item ${messageItem.dataset.messageId}`);
                 messageItem.style.setProperty('--dynamic-avatar-color', colorStr);
-                
+
                 // 后备方案：直接应用到avatarImg
                 if (avatarImg) {
                     avatarImg.style.borderColor = colorStr;
                     avatarImg.style.borderWidth = '2px';
                     avatarImg.style.borderStyle = 'solid';
                 }
-                
+
                 // 如果需要，也应用到名称
                 if (shouldApplyColorToName && senderNameDiv) {
                     senderNameDiv.style.color = colorStr;
@@ -1435,7 +1473,7 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
                         // 如果有自定义边框颜色但需要应用颜色到名称，单独处理
                         senderNameDiv.style.color = dominantColor;
                     }
-                    
+
                     // Persist the extracted color
                     let typeToSave, idToSaveFor;
                     if (message.role === 'user') {
@@ -1451,7 +1489,7 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
                             .then(result => {
                                 if (result.success) {
                                     if (typeToSave === 'user') {
-                                        mainRendererReferences.globalSettingsRef.set({...globalSettings, userAvatarCalculatedColor: dominantColor });
+                                        mainRendererReferences.globalSettingsRef.set({ ...globalSettings, userAvatarCalculatedColor: dominantColor });
                                     } else if (typeToSave === 'agent' && idToSaveFor === currentSelectedItem.id) {
                                         if (currentSelectedItem.config) {
                                             currentSelectedItem.config.avatarCalculatedColor = dominantColor;
@@ -1471,17 +1509,17 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
             // Remove the custom property. The CSS will automatically use its fallback values.
             messageItem.style.removeProperty('--dynamic-avatar-color');
         }
-        
+
         // 应用自定义名称文字颜色
         if (customNameColor && senderNameDiv) {
             console.debug(`[DEBUG] Applying custom name color ${customNameColor} to sender name`);
             senderNameDiv.style.color = customNameColor;
         }
-        
+
         // 应用会话样式CSS到聊天消息
         if (message.role === 'assistant') {
             let chatCss = '';
-            
+
             if (message.isGroupMessage && message.agentId) {
                 // 群组消息中的Agent
                 const agentConfig = currentSelectedItem?.config?.agents?.find(a => a.id === message.agentId);
@@ -1491,24 +1529,24 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
                 const agentConfig = currentSelectedItem.config || currentSelectedItem;
                 chatCss = agentConfig?.chatCss || '';
             }
-            
+
             // 通过动态注入<style>标签应用会话CSS
             if (chatCss && chatCss.trim()) {
                 console.debug(`[DEBUG] Applying chat CSS to message ${message.id}:`, chatCss);
-                
+
                 // 为此消息创建唯一的scope ID
                 const chatScopeId = `vcp-chat-${message.id}`;
                 messageItem.setAttribute('data-chat-scope', chatScopeId);
-                
+
                 // 检查是否已存在相同的style标签
                 let existingStyle = document.head.querySelector(`style[data-chat-scope-id="${chatScopeId}"]`);
                 if (existingStyle) {
                     existingStyle.remove();
                 }
-                
+
                 // 创建scoped CSS（为当前消息添加作用域）
                 const scopedChatCss = `[data-chat-scope="${chatScopeId}"] ${chatCss}`;
-                
+
                 // 注入到<head>
                 const styleElement = document.createElement('style');
                 styleElement.type = 'text/css';
@@ -1522,24 +1560,24 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
 
     // Attachments and content processing are now deferred within a requestAnimationFrame
     // to prevent race conditions during history loading. See the block above.
-   
-   // The responsibility of updating the history array is now moved to the caller (e.g., chatManager.handleSendMessage)
-   // to ensure a single source of truth and prevent race conditions.
-   /*
-   if (!isInitialLoad && !message.isThinking) {
-        const currentChatHistoryArray = mainRendererReferences.currentChatHistoryRef.get();
-        currentChatHistoryArray.push(message);
-        mainRendererReferences.currentChatHistoryRef.set(currentChatHistoryArray); // Update the ref
 
-        if (currentSelectedItem.id && mainRendererReferences.currentTopicIdRef.get()) {
-             if (currentSelectedItem.type === 'agent') {
-                electronAPI.saveChatHistory(currentSelectedItem.id, mainRendererReferences.currentTopicIdRef.get(), currentChatHistoryArray);
-             } else if (currentSelectedItem.type === 'group') {
-                // Group history is usually saved by groupchat.js in main process after AI response
-             }
-        }
-    }
-    */
+    // The responsibility of updating the history array is now moved to the caller (e.g., chatManager.handleSendMessage)
+    // to ensure a single source of truth and prevent race conditions.
+    /*
+    if (!isInitialLoad && !message.isThinking) {
+         const currentChatHistoryArray = mainRendererReferences.currentChatHistoryRef.get();
+         currentChatHistoryArray.push(message);
+         mainRendererReferences.currentChatHistoryRef.set(currentChatHistoryArray); // Update the ref
+ 
+         if (currentSelectedItem.id && mainRendererReferences.currentTopicIdRef.get()) {
+              if (currentSelectedItem.type === 'agent') {
+                 electronAPI.saveChatHistory(currentSelectedItem.id, mainRendererReferences.currentTopicIdRef.get(), currentChatHistoryArray);
+              } else if (currentSelectedItem.type === 'group') {
+                 // Group history is usually saved by groupchat.js in main process after AI response
+              }
+         }
+     }
+     */
     if (isInitialLoad && message.isThinking) {
         // This case should ideally not happen if thinking messages aren't persisted.
         // If it does, remove the transient thinking message.
@@ -1553,12 +1591,12 @@ async function renderMessage(message, isInitialLoad = false, appendToDom = true)
         return null;
     }
 
-   // Highlighting is now part of processRenderedContent
-   
-   if (appendToDom) {
-       mainRendererReferences.uiHelper.scrollToBottom();
-   }
-   return messageItem;
+    // Highlighting is now part of processRenderedContent
+
+    if (appendToDom) {
+        mainRendererReferences.uiHelper.scrollToBottom();
+    }
+    return messageItem;
 }
 
 function startStreamingMessage(message, messageItem = null) {
@@ -1570,10 +1608,10 @@ function appendStreamChunk(messageId, chunkData, context) {
     streamManager.appendStreamChunk(messageId, chunkData, context);
 }
 
-async function finalizeStreamedMessage(messageId, finishReason, context) {
+async function finalizeStreamedMessage(messageId, finishReason, context, finalPayload = null) {
     // 责任完全在 streamManager 内部，它应该使用自己拼接好的文本。
     // 我们现在只传递必要的元数据。
-    await streamManager.finalizeStreamedMessage(messageId, finishReason, context);
+    await streamManager.finalizeStreamedMessage(messageId, finishReason, context, finalPayload);
 
     // --- 核心修复：流式结束后，对完整内容重新应用前端正则 ---
     // 这是为了解决流式传输导致正则表达式（如元思考链）被分割而无法匹配的问题
@@ -1703,11 +1741,11 @@ function updateMessageContent(messageId, newContent) {
 
     const globalSettings = globalSettingsRef.get();
     let textToRender = (typeof newContent === 'string') ? newContent : (newContent?.text || "[内容格式异常]");
-    
+
     // --- 深度计算 (用于历史消息渲染) ---
     const currentChatHistoryForUpdate = mainRendererReferences.currentChatHistoryRef.get();
     const messageInHistory = currentChatHistoryForUpdate.find(m => m.id === messageId);
-    
+
     // --- 按“对话轮次”计算深度 ---
     const depthForUpdate = calculateDepthByTurns(messageId, currentChatHistoryForUpdate);
     // --- 深度计算结束 ---
@@ -1822,18 +1860,18 @@ async function renderMessageBatch(messages, scrollToBottom = false) {
 
     // 一次性添加到 fragment
     messageElements.forEach(el => fragment.appendChild(el));
-    
+
     // 使用 requestAnimationFrame 确保 DOM 更新不阻塞 UI
     return new Promise(resolve => {
         requestAnimationFrame(() => {
             // Step 1: Append all elements to the DOM at once.
             mainRendererReferences.chatMessagesDiv.appendChild(fragment);
-            
+
             // Step 2: Now that they are in the DOM, run the deferred processing for each.
             messageElements.forEach(el => {
                 // 观察批量渲染的消息
                 visibilityOptimizer.observeMessage(el);
-                
+
                 if (typeof el._vcp_process === 'function') {
                     el._vcp_process();
                     delete el._vcp_process; // Clean up to avoid memory leaks
@@ -1859,16 +1897,16 @@ async function renderMessageBatch(messages, scrollToBottom = false) {
  */
 async function renderOlderMessagesInBatches(olderMessages, batchSize, batchDelay) {
     const totalBatches = Math.ceil(olderMessages.length / batchSize);
-    
+
     for (let i = totalBatches - 1; i >= 0; i--) {
         const startIndex = i * batchSize;
         const endIndex = Math.min(startIndex + batchSize, olderMessages.length);
         const batch = olderMessages.slice(startIndex, endIndex);
-        
+
         // 创建批次 fragment
         const batchFragment = document.createDocumentFragment();
         const elementsForProcessing = [];
-        
+
         for (const msg of batch) {
             const messageElement = await renderMessage(msg, true, false);
             if (messageElement) {
@@ -1876,7 +1914,7 @@ async function renderOlderMessagesInBatches(olderMessages, batchSize, batchDelay
                 elementsForProcessing.push(messageElement);
             }
         }
-        
+
         // 🟢 使用 requestIdleCallback 在空闲时插入（降级到 requestAnimationFrame）
         await new Promise(resolve => {
             const insertBatch = () => {
@@ -1885,7 +1923,7 @@ async function renderOlderMessagesInBatches(olderMessages, batchSize, batchDelay
                 while (insertPoint?.classList?.contains('topic-timestamp-bubble')) {
                     insertPoint = insertPoint.nextSibling;
                 }
-                
+
                 if (insertPoint) {
                     chatMessagesDiv.insertBefore(batchFragment, insertPoint);
                 } else {
@@ -1912,7 +1950,7 @@ async function renderOlderMessagesInBatches(olderMessages, batchSize, batchDelay
                 requestAnimationFrame(insertBatch);
             }
         });
-        
+
         // 动态调整延迟：如果批次小，减少延迟
         if (i > 0 && batchDelay > 0) {
             const actualDelay = batch.length < batchSize / 2 ? batchDelay / 2 : batchDelay;
@@ -1939,7 +1977,7 @@ async function renderHistoryLegacy(history) {
 
     // Phase 2: Append all created elements at once using a DocumentFragment
     allMessageElements.forEach(el => fragment.appendChild(el));
-    
+
     return new Promise(resolve => {
         requestAnimationFrame(() => {
             // Step 1: Append all elements to the DOM.

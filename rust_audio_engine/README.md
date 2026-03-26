@@ -4,25 +4,43 @@
 
 ## 构建说明
 
-本项目使用 `maturin` 进行构建。
+本项目使用 `maturin` 进行构建，依赖 vcpkg 安装的 soxr 库。
 
-### 关键编译问题记录
+### 编译命令 (Windows CMD)
 
-在开发过程中，我们遇到了针对 **Python 3.13** 的编译问题。`PyO3 v0.21.2` 的构建脚本会报错，提示其最高仅支持到 Python 3.12。
-
-**解决方案**是，在编译时设置一个特定的环境变量 `PYO3_USE_ABI3_FORWARD_COMPATIBILITY`，以强制 `PyO3` 使用稳定的 ABI 进行前向兼容构建。
-
-### 最终编译命令 (PowerShell)
-
-在 **PowerShell** 终端中，使用以下命令来构建 wheel 安装包：
-
-```powershell
-$env:PYO3_USE_ABI3_FORWARD_COMPATIBILITY="1"; maturin build --release
+```cmd
+cd H:\VCP\VCPChat\rust_audio_engine
+set PATH=H:\VCP\vcpkg\installed\x64-windows-static\tools\pkgconf;%PATH%
+set "PKG_CONFIG_PATH=H:\VCP\vcpkg\installed\x64-windows-static\lib\pkgconfig"
+set RUSTFLAGS=-C target-cpu=native
+py -3.13 -m maturin build --release --interpreter python3.13
 ```
 
-**注意**: 必须使用分号 `;` 将设置环境变量和执行 `maturin` 命令放在同一行，以确保环境变量能够被 `maturin` 进程继承。
+### 安装命令
 
-构建成功后，wheel 文件会生成在 `target/wheels/` 目录下。
+```cmd
+py -3.13 -m pip install target/wheels/rust_audio_resampler-0.1.0-cp313-cp313-win_amd64.whl --force-reinstall
+```
 
-安装指令
-pip install target\wheels\rust_audio_resampler-0.1.0-cp313-cp313-win_amd64.whl
+### 一键编译安装 (Windows CMD)
+
+```cmd
+cd H:\VCP\VCPChat\rust_audio_engine && set PATH=H:\VCP\vcpkg\installed\x64-windows-static\tools\pkgconf;%PATH% && set "PKG_CONFIG_PATH=H:\VCP\vcpkg\installed\x64-windows-static\lib\pkgconfig" && set RUSTFLAGS=-C target-cpu=native && py -3.13 -m maturin build --release --interpreter python3.13 && py -3.13 -m pip install target/wheels/rust_audio_resampler-0.1.0-cp313-cp313-win_amd64.whl --force-reinstall
+```
+
+```cmd
+cd rust_audio_engine && set PATH=H:\VCP\vcpkg\installed\x64-windows-static\tools\pkgconf;%PATH% && set "PKG_CONFIG_PATH=H:\VCP\vcpkg\installed\x64-windows-static\lib\pkgconfig" && set RUSTFLAGS=-C target-cpu=native && cargo build --release
+```
+```
+$env:PATH = "H:\VCP\vcpkg\installed\x64-windows-static\tools\pkgconf;$env:PATH"; $env:PKG_CONFIG_PATH = "H:\VCP\vcpkg\installed\x64-windows-static\lib\pkgconfig"; $env:RUSTFLAGS = "-C target-cpu=native"; cargo build --release
+```
+
+
+## 关键技术点
+
+- **SIMD 加速**: 通过 `target-cpu=native` 开启，显著提升 FFT 卷积和噪声整形的性能。
+- **Python 3.13**: 完美支持最新版 Python。
+- **64-bit Pipeline**: 内部处理全程保持双精度浮点。
+- **高精度相位时钟**: 启用 `QualityFlags::HighPrecisionClock`，提升无理数采样率比的精度。
+- **极高品质**: 使用 `QualityRecipe::very_high()` (= Bits28) 配置。
+- **多通道支持**: 1-2 通道使用 Stereo 格式高效处理，3+ 通道使用 Mono 逐通道处理。

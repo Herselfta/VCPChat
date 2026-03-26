@@ -1,27 +1,36 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <title>音乐播放器</title>
     <!-- 确保主样式表在插件样式表之前加载 -->
-    <link rel="stylesheet" href="../style.css"> 
+    <link rel="stylesheet" href="../style.css">
     <link rel="stylesheet" href="music.css">
 </head>
+
 <body>
     <!-- Phantom audio element to enable Media Session API -->
     <audio id="phantom-audio" loop style="display:none;"></audio>
-<!-- Custom Title Bar -->
+    <!-- Custom Title Bar -->
     <div id="custom-title-bar">
         <div class="title">VCP - 音乐播放器</div>
         <div class="window-controls">
             <button id="minimize-music-btn" class="window-control-btn" title="最小化">
-                <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" stroke-width="1.2"></line></svg>
+                <svg width="10" height="10" viewBox="0 0 10 10">
+                    <line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" stroke-width="1.2"></line>
+                </svg>
             </button>
             <button id="maximize-music-btn" class="window-control-btn" title="最大化">
-                <svg width="10" height="10" viewBox="0 0 10 10"><path fill="none" stroke="currentColor" stroke-width="1" d="M0.5,0.5 h9 v9 h-9 z"></path></svg>
+                <svg width="10" height="10" viewBox="0 0 10 10">
+                    <path fill="none" stroke="currentColor" stroke-width="1" d="M0.5,0.5 h9 v9 h-9 z"></path>
+                </svg>
             </button>
             <button id="close-music-btn" class="window-control-btn" title="关闭">
-                <svg width="10" height="10" viewBox="0 0 10 10"><path fill="currentColor" d="M0.5,0.5 9.5,9.5 M9.5,0.5 0.5,9.5" stroke="currentColor" stroke-width="1.2"></path></svg>
+                <svg width="10" height="10" viewBox="0 0 10 10">
+                    <path fill="currentColor" d="M0.5,0.5 9.5,9.5 M9.5,0.5 0.5,9.5" stroke="currentColor"
+                        stroke-width="1.2"></path>
+                </svg>
             </button>
         </div>
     </div>
@@ -29,6 +38,24 @@
     <div id="player-background"></div>
 
     <div class="music-player-container">
+        <!-- 左侧边栏 -->
+        <div id="left-sidebar" class="left-sidebar glass-panel">
+            <div class="sidebar-tabs">
+                <button class="sidebar-tab active" data-view="all">全部</button>
+                <button class="sidebar-tab" data-view="albums">专辑</button>
+                <button class="sidebar-tab" data-view="artists">歌手</button>
+                <button class="sidebar-tab" data-view="playlists">歌单</button>
+            </div>
+            <div class="sidebar-content" id="sidebar-content">
+                <!-- 动态内容由 JS 渲染 -->
+            </div>
+            <div class="sidebar-footer" id="sidebar-footer" style="display:none;">
+                <button id="create-playlist-btn" class="create-playlist-btn">
+                    <span>+</span> 新建歌单
+                </button>
+            </div>
+        </div>
+
         <div class="main-content">
             <!-- 上方的播放器核心控制区 -->
             <div class="music-player glass-panel">
@@ -42,7 +69,11 @@
                         <div class="track-bitrate"></div>
                     </div>
                     <button id="share-btn" class="control-btn" title="分享当前音频">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18 16.08C17.24 16.08 16.56 16.38 16.04 16.85L8.91 12.7C8.96 12.47 9 12.24 9 12C9 11.76 8.96 11.53 8.91 11.3L16.04 7.15C16.56 7.62 17.24 7.92 18 7.92C19.66 7.92 21 6.58 21 4.92C21 3.26 19.66 1.92 18 1.92C16.34 1.92 15 3.26 15 4.92C15 5.16 15.04 5.39 15.09 5.61L7.96 9.75C7.44 9.28 6.76 8.98 6 8.98C4.34 8.98 3 10.32 3 11.98C3 13.64 4.34 14.98 6 14.98C6.76 14.98 7.44 14.68 7.96 14.21L15.09 18.35C15.04 18.57 15 18.8 15 19.04C15 20.7 16.34 22.04 18 22.04C19.66 22.04 21 20.7 21 19.04C21 17.38 19.66 16.08 18 16.08Z" fill="currentColor"/></svg>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path
+                                d="M18 16.08C17.24 16.08 16.56 16.38 16.04 16.85L8.91 12.7C8.96 12.47 9 12.24 9 12C9 11.76 8.96 11.53 8.91 11.3L16.04 7.15C16.56 7.62 17.24 7.92 18 7.92C19.66 7.92 21 6.58 21 4.92C21 3.26 19.66 1.92 18 1.92C16.34 1.92 15 3.26 15 4.92C15 5.16 15.04 5.39 15.09 5.61L7.96 9.75C7.44 9.28 6.76 8.98 6 8.98C4.34 8.98 3 10.32 3 11.98C3 13.64 4.34 14.98 6 14.98C6.76 14.98 7.44 14.68 7.96 14.21L15.09 18.35C15.04 18.57 15 18.8 15 19.04C15 20.7 16.34 22.04 18 22.04C19.66 22.04 21 20.7 21 19.04C21 17.38 19.66 16.08 18 16.08Z"
+                                fill="currentColor" />
+                        </svg>
                     </button>
                 </div>
 
@@ -62,19 +93,44 @@
                 <div class="controls">
                     <button id="mode-btn" class="control-btn icon-btn"></button>
                     <button id="prev-btn" class="control-btn">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M19 5V19L12 12L19 5Z" fill="currentColor"/><path d="M5 5H7V19H5V5Z" fill="currentColor"/></svg>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M19 5V19L12 12L19 5Z" fill="currentColor" />
+                            <path d="M5 5H7V19H5V5Z" fill="currentColor" />
+                        </svg>
                     </button>
                     <button id="play-pause-btn" class="control-btn play-btn">
-                        <svg class="play-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 5V19L19 12L8 5Z" fill="currentColor"/></svg>
-                        <svg class="pause-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 19H10V5H6V19ZM14 5V19H18V5H14Z" fill="currentColor"/></svg>
+                        <svg class="play-icon" width="40" height="40" viewBox="0 0 24 24" fill="none"
+                            xmlns="http://www.w3.org/2000/svg">
+                            <path d="M8 5V19L19 12L8 5Z" fill="currentColor" />
+                        </svg>
+                        <svg class="pause-icon" width="40" height="40" viewBox="0 0 24 24" fill="none"
+                            xmlns="http://www.w3.org/2000/svg">
+                            <path d="M6 19H10V5H6V19ZM14 5V19H18V5H14Z" fill="currentColor" />
+                        </svg>
                     </button>
                     <button id="next-btn" class="control-btn">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 5V19L12 12L5 5Z" fill="currentColor"/><path d="M17 5H19V19H17V5Z" fill="currentColor" /></svg>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M5 5V19L12 12L5 5Z" fill="currentColor" />
+                            <path d="M17 5H19V19H17V5Z" fill="currentColor" />
+                        </svg>
                     </button>
                     <div class="volume-control">
                         <button id="volume-btn" class="control-btn">
-                            <svg class="volume-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 9V15H7L12 20V4L7 9H3ZM16.5 12C16.5 10.23 15.48 8.71 14 7.97V16.03C15.48 15.29 16.5 13.77 16.5 12Z" fill="currentColor"/><path d="M14 3.23V5.29C16.89 6.15 19 8.83 19 12C19 15.17 16.89 17.85 14 18.71V20.77C18.01 19.86 21 16.28 21 12C21 7.72 18.01 4.14 14 3.23Z" fill="currentColor"/></svg>
-                            <svg class="mute-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M16.5 12C16.5 10.23 15.48 8.71 14 7.97V10.18L16.45 12.63C16.48 12.43 16.5 12.21 16.5 12ZM19 12C19 12.94 18.8 13.82 18.46 14.64L19.97 16.15C20.62 14.91 21 13.5 21 12C21 7.72 18.01 4.14 14 3.23V5.29C16.89 6.15 19 8.83 19 12ZM1.27 4.27L3 6.01V15H7L12 20V13.28L14.73 16.01C14.5 16.02 14.25 16.03 14 16.03V18.71C14.73 18.71 15.43 18.58 16.08 18.33L18.73 20.98L20 19.71L4.27 3L3 4.27L12 13.27V4L7 9H3V6.01L1.27 4.27ZM12 4L9.91 6.09L12 8.18V4Z" fill="currentColor"/></svg>
+                            <svg class="volume-icon" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <path
+                                    d="M3 9V15H7L12 20V4L7 9H3ZM16.5 12C16.5 10.23 15.48 8.71 14 7.97V16.03C15.48 15.29 16.5 13.77 16.5 12Z"
+                                    fill="currentColor" />
+                                <path
+                                    d="M14 3.23V5.29C16.89 6.15 19 8.83 19 12C19 15.17 16.89 17.85 14 18.71V20.77C18.01 19.86 21 16.28 21 12C21 7.72 18.01 4.14 14 3.23Z"
+                                    fill="currentColor" />
+                            </svg>
+                            <svg class="mute-icon" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                                xmlns="http://www.w3.org/2000/svg">
+                                <path
+                                    d="M16.5 12C16.5 10.23 15.48 8.71 14 7.97V10.18L16.45 12.63C16.48 12.43 16.5 12.21 16.5 12ZM19 12C19 12.94 18.8 13.82 18.46 14.64L19.97 16.15C20.62 14.91 21 13.5 21 12C21 7.72 18.01 4.14 14 3.23V5.29C16.89 6.15 19 8.83 19 12ZM1.27 4.27L3 6.01V15H7L12 20V13.28L14.73 16.01C14.5 16.02 14.25 16.03 14 16.03V18.71C14.73 18.71 15.43 18.58 16.08 18.33L18.73 20.98L20 19.71L4.27 3L3 4.27L12 13.27V4L7 9H3V6.01L1.27 4.27ZM12 4L9.91 6.09L12 8.18V4Z"
+                                    fill="currentColor" />
+                            </svg>
                         </button>
                         <input type="range" id="volume-slider" min="0" max="1" step="0.01" value="1">
                     </div>
@@ -168,7 +224,7 @@
                                 <span class="slider round"></span>
                             </label>
                         </div>
-                        
+
                         <div class="eq-controls-row">
                             <select id="eq-type-select" class="eq-type-select">
                                 <option value="IIR">IIR (低延迟)</option>
@@ -192,8 +248,86 @@
             </div>
         </div>
     </div>
+    <!-- 右键菜单 -->
+    <div id="track-context-menu" class="context-menu">
+        <div class="context-menu-item" data-action="play">
+            <svg viewBox="0 0 24 24" width="16" height="16">
+                <path d="M8 5v14l11-7z" fill="currentColor" />
+            </svg>
+            <span>播放</span>
+        </div>
+        <div class="context-menu-item" data-action="play-next">
+            <svg viewBox="0 0 24 24" width="16" height="16">
+                <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" fill="currentColor" />
+            </svg>
+            <span>下一首播放</span>
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item has-submenu" data-action="add-to-playlist">
+            <svg viewBox="0 0 24 24" width="16" height="16">
+                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor" />
+            </svg>
+            <span>添加到歌单</span>
+            <svg class="chevron" viewBox="0 0 24 24" width="12" height="12">
+                <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" fill="currentColor" />
+            </svg>
+            <div class="context-submenu" id="playlist-submenu"></div>
+        </div>
+        <div class="context-menu-item" data-action="create-playlist-add">
+            <svg viewBox="0 0 24 24" width="16" height="16">
+                <path
+                    d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"
+                    fill="currentColor" />
+            </svg>
+            <span>新建歌单并添加</span>
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item danger" data-action="remove-from-list">
+            <svg viewBox="0 0 24 24" width="16" height="16">
+                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"
+                    fill="currentColor" />
+            </svg>
+            <span>从列表中移除</span>
+        </div>
+    </div>
+
+    <!-- 新建歌单对话框 -->
+    <div id="playlist-dialog" class="dialog-overlay">
+        <div class="dialog glass-panel">
+            <h3>新建歌单</h3>
+            <input type="text" id="playlist-name-input" placeholder="输入歌单名称...">
+            <div class="dialog-actions">
+                <button class="dialog-btn cancel" id="dialog-cancel">取消</button>
+                <button class="dialog-btn confirm" id="dialog-confirm">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 歌单编辑模态框 -->
+    <div id="playlist-edit-modal" class="music-modal-overlay">
+        <div class="music-modal">
+            <div class="music-modal-header">
+                <h3 id="modal-playlist-title">编辑歌单</h3>
+                <button class="music-modal-close-btn" id="modal-close-btn">✕</button>
+            </div>
+            <div class="music-modal-search">
+                <input type="text" id="modal-search-input" placeholder="搜索歌曲...">
+            </div>
+            <div class="music-modal-content">
+                <div class="music-modal-song-list" id="modal-song-list">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+            <div class="music-modal-footer">
+                <span class="modal-count" id="modal-count">0 首歌曲</span>
+                <button class="dialog-btn confirm" id="modal-done-btn">完成</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 确保 JS 在 body 结束前加载 -->
     <script src="socket.io.min.js"></script>
     <script src="music.js"></script>
 </body>
+
 </html>

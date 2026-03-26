@@ -1,0 +1,480 @@
+/* ShellViewer.css - PTYShellExecutor GUI 样式 */
+
+/* 全局样式重置和深色背景 */
+body, html {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    width: 100%;
+    background-color: transparent;
+    color: var(--primary-text, #cdd6f4);
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+}
+
+/* CSS 变量 - 深色主题 (Catppuccin Mocha) */
+:root {
+    --primary-bg: #1e1e2e;
+    --secondary-bg: #181825;
+    --tertiary-bg: #11111b;
+    --panel-bg: rgba(30, 30, 46, 0.45);
+    --primary-text: #cdd6f4;
+    --secondary-text: #a6adc8;
+    --highlight-text: #89b4fa;
+    --accent-bg: #45475a;
+    --border-color: #313244;
+    --button-bg: #89b4fa;
+    --button-hover-bg: #b4befe;
+    --text-on-accent: #1e1e2e;
+    --success-color: #a6e3a1;
+    --danger-color: #f38ba8;
+    --danger-hover-bg: #eba0ac;
+    --warning-color: #f9e2af;
+    --quoted-text: #f9e2af;
+    --chat-bubble-border-radius: 10px;
+}
+
+/* 浅色主题 (Catppuccin Latte) */
+[data-theme="light"],
+.light-theme {
+    --primary-bg: #eff1f5;
+    --secondary-bg: #e6e9ef;
+    --tertiary-bg: #dce0e8;
+    --panel-bg: rgba(239, 241, 245, 0.45);
+    --primary-text: #4c4f69;
+    --secondary-text: #6c6f85;
+    --highlight-text: #1e66f5;
+    --accent-bg: #acb0be;
+    --border-color: #ccd0da;
+    --button-bg: #1e66f5;
+    --button-hover-bg: #7287fd;
+    --text-on-accent: #eff1f5;
+    --success-color: #40a02b;
+    --danger-color: #d20f39;
+    --danger-hover-bg: #e64553;
+    --warning-color: #df8e1d;
+    --quoted-text: #df8e1d;
+}
+
+/* --- 自定义标题栏 --- */
+#custom-title-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 12px;
+    z-index: 1000;
+    -webkit-app-region: drag;
+    user-select: none;
+    background: var(--secondary-bg);
+    border-bottom: 1px solid var(--border-color);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+#custom-title-bar > * {
+    -webkit-app-region: no-drag;
+}
+
+.title-text-container {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.title-icon {
+    font-size: 16px;
+}
+
+#custom-title-bar .title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--primary-text);opacity: 0.8;
+}
+
+#custom-title-bar .window-controls {
+    display: flex;
+    height: 100%;
+}
+
+.window-control-btn {
+    width: 46px;
+    height: 100%;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s;
+    color: var(--primary-text);
+}
+
+.window-control-btn svg {
+    width: 10px;
+    height: 10px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.2;
+}
+
+.window-control-btn:hover {
+    background-color: var(--accent-bg);
+}
+
+.btn-close:hover {
+    background-color: var(--danger-color) !important;
+    color: white;
+}
+
+/* --- 内容包装器，实现磨砂玻璃效果 --- */
+#content-wrapper {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--panel-bg, rgba(30, 30, 46, 0.45));
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    overflow: hidden;
+    min-height: 0;
+    margin-top: 32px;
+}
+
+/* --- 静态字符画样式 --- */
+#ascii-art-container {
+    color: var(--highlight-text);
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 10px;
+    line-height: 1.1;
+    text-align: center;
+    padding: 15px 10px 5px 10px;
+    margin: 0;
+    white-space: pre;
+    background-color: transparent;
+    flex-shrink: 0;
+    opacity: 0.9;
+}
+
+/* 终端容器样式 */
+#terminal-container {
+    width: 100%;
+    flex-grow: 1;
+    padding: 0 10px;
+    box-sizing: border-box;
+    min-height: 0;
+    overflow: hidden; /* 确保容器本身不产生滚动条 */
+}
+
+/* 隐藏 xterm.js 视口的原生滚动条 */
+.xterm .xterm-viewport::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+}
+
+.xterm .xterm-viewport {
+    overflow-y: hidden !important;
+}
+
+/* xterm.js 终端的特定样式覆盖 */
+.xterm {
+    padding: 0 15px 15px 15px;
+    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 确保 xterm 的视口能够正确填充其容器 */
+.xterm .xterm-viewport {
+    flex-grow: 1;
+    background-color: transparent !important;
+}
+
+/* 自定义滚动条样式 */
+.xterm .xterm-viewport::-webkit-scrollbar {
+    width: 8px;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar-track {
+    background: var(--secondary-bg);
+    border-radius: 4px;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar-thumb {
+    background-color: var(--accent-bg);
+    border-radius: 4px;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+    background-color: var(--highlight-text);
+}
+
+/* --- 输入区域样式 --- */
+#input-area {
+    display: flex;
+    padding: 12px 16px;
+    flex-shrink: 0;
+    background-color: var(--secondary-bg);
+    border-top: 1px solid var(--border-color);
+    gap: 12px;
+    align-items: flex-end;
+    box-shadow: 0 -1px 3px rgba(0,0,0,0.05);
+}
+
+/* Shell 提示符 */
+.shell-prompt {
+    color: var(--highlight-text);
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 8px 0;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+#command-input {
+    flex-grow: 1;
+    background-color: var(--primary-bg);
+    color: var(--primary-text);
+    border: 1px solid var(--border-color);
+    padding: 8px 12px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    border-radius: 4px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    resize: none;
+    overflow-y: auto;
+    line-height: 1.5;
+    min-height: 36px;
+    max-height: 150px;
+}
+
+#command-input:focus {
+    border-color: var(--highlight-text);
+    box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2);
+}
+
+#command-input::placeholder {
+    color: var(--secondary-text);
+    opacity: 0.6;
+}
+
+#send-button {
+    background-color: var(--button-bg);
+    color: var(--text-on-accent);
+    border: none;
+    padding: 0 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 13px;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#send-button:hover {
+    background-color: var(--button-hover-bg);
+}
+
+#send-button:active {
+    transform: scale(0.98);
+}
+
+#send-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* --- 状态指示器 --- */
+.status-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 6px 16px;
+    font-size: 11px;
+    color: var(--secondary-text);
+    background: var(--secondary-bg);
+    border-top: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.status-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--success-color);
+    animation: pulse 2s infinite;
+}
+
+.status-dot.disconnected {
+    background: var(--danger-color);
+    animation: none;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.debug-toggle-btn {
+    background: var(--accent-bg);
+    color: var(--primary-text);
+    border: none;
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-size: 10px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.debug-toggle-btn:hover {
+    background: var(--highlight-text);
+    color: var(--text-on-accent);
+}
+
+/* --- Debug 面板 --- */
+#debug-panel {
+    position: fixed;
+    bottom: 120px;
+    right: 20px;
+    width: 350px;
+    height: 250px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    z-index: 2000;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+#debug-panel.hidden {
+    display: none;
+}
+
+.debug-header {
+    padding: 8px 12px;
+    background: var(--tertiary-bg);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.debug-header button {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--secondary-text);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    cursor: pointer;
+}
+
+#debug-logs {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 8px;
+    font-size: 10px;
+    color: var(--secondary-text);
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.log-entry {
+    margin-bottom: 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    padding-bottom: 2px;
+}
+
+.log-time { color: var(--highlight-text); margin-right: 6px; }
+.log-type { font-weight: bold; margin-right: 6px; }
+.log-type.error { color: var(--danger-color); }
+.log-type.info { color: var(--success-color); }
+
+/* --- 快捷键提示 --- */
+.shortcuts-hint {
+    display: flex;
+    gap: 16px;
+    padding: 8px 16px;
+    font-size: 11px;
+    color: var(--secondary-text);
+    background: var(--secondary-bg);
+    border-top: 1px solid var(--border-color);
+    flex-shrink: 0;
+    opacity: 0.8;
+}
+
+.shortcut {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.shortcut kbd {
+    background: var(--accent-bg);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 10px;
+}
+
+/* --- 响应式调整 --- */
+@media (max-width: 600px) {
+    #ascii-art-container {
+        font-size: 8px;
+        padding: 10px 5px 5px 5px;
+    }
+    
+    #input-area {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .shell-prompt {
+        display: none;
+    }
+    
+    #send-button {
+        width: 100%;
+    }
+}
+
+/* --- 动画效果 --- */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+#content-wrapper {
+    animation: fadeIn 0.3s ease-out;
+}
+
+#input-area {
+    animation: fadeIn 0.3s ease-out 0.1s both;
+}

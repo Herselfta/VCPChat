@@ -28,35 +28,27 @@ function initialize(mainWindow, context) {
         if (!agentId || !Array.isArray(orderedTopicIds)) {
             return { success: false, error: '无效的 agentId 或 topic IDs' };
         }
-        const agentConfigPath = path.join(AGENT_DIR, agentId, 'config.json');
         try {
-            const agentConfig = await fs.readJson(agentConfigPath);
-            // 增加对损坏配置的检查
-            if (!agentConfig.topics || !Array.isArray(agentConfig.topics)) {
-                console.error(`保存Agent ${agentId} 的话题顺序失败: 配置文件损坏或缺少话题列表。`);
-                return { success: false, error: '配置文件损坏或缺少话题列表。' };
-            }
-            
-            const newTopicsArray = [];
-            const topicMap = new Map(agentConfig.topics.map(topic => [topic.id, topic]));
-
-            orderedTopicIds.forEach(id => {
-                if (topicMap.has(id)) {
-                    newTopicsArray.push(topicMap.get(id));
-                    topicMap.delete(id); 
-                }
-            });
-            
-            newTopicsArray.push(...topicMap.values());
-            agentConfig.topics = newTopicsArray;
-
             if (agentConfigManager) {
-                await agentConfigManager.updateAgentConfig(agentId, config => ({
-                    ...config,
-                    topics: newTopicsArray
-                }));
+                await agentConfigManager.updateAgentConfig(agentId, config => {
+                    if (!config.topics || !Array.isArray(config.topics)) {
+                        console.error(`保存Agent ${agentId} 的话题顺序失败: 配置文件损坏或缺少话题列表。`);
+                        return config;
+                    }
+                    const topicMap = new Map(config.topics.map(topic => [topic.id, topic]));
+                    const newTopicsArray = [];
+                    orderedTopicIds.forEach(id => {
+                        if (topicMap.has(id)) {
+                            newTopicsArray.push(topicMap.get(id));
+                            topicMap.delete(id);
+                        }
+                    });
+                    newTopicsArray.push(...topicMap.values());
+                    return { ...config, topics: newTopicsArray };
+                });
             } else {
-                await fs.writeJson(agentConfigPath, agentConfig, { spaces: 2 });
+                console.error(`AgentConfigManager not available, cannot safely save topic order for agent ${agentId}`);
+                return { success: false, error: 'AgentConfigManager 未初始化，无法安全保存话题顺序。' };
             }
             return { success: true };
         } catch (error) {
@@ -83,7 +75,7 @@ function initialize(mainWindow, context) {
                     topicMap.delete(id);
                 }
             });
-            
+
             newTopicsArray.push(...topicMap.values());
             groupConfig.topics = newTopicsArray;
 
@@ -143,39 +135,24 @@ function initialize(mainWindow, context) {
     ipcMain.handle('save-agent-topic-title', async (event, agentId, topicId, newTitle) => {
         if (!topicId || !newTitle) return { error: "保存话题标题失败: topicId 或 newTitle 未提供。" };
         try {
-            const configPath = path.join(AGENT_DIR, agentId, 'config.json');
-            if (!await fs.pathExists(configPath)) return { error: `保存话题标题失败: Agent ${agentId} 的配置文件不存在。` };
-            
-            let config;
-            try {
-                config = await fs.readJson(configPath);
-            } catch (e) {
-                console.error(`读取Agent ${agentId} 配置文件失败 (save-agent-topic-title):`, e);
-                return { error: `读取配置文件失败: ${e.message}` };
-            }
-            if (!config.topics || !Array.isArray(config.topics)) return { error: `保存话题标题失败: Agent ${agentId} 没有话题列表。` };
-
-            const topicIndex = config.topics.findIndex(t => t.id === topicId);
-            if (topicIndex === -1) return { error: `保存话题标题失败: Agent ${agentId} 中未找到 ID 为 ${topicId} 的话题。` };
-
             if (agentConfigManager) {
                 await agentConfigManager.updateAgentConfig(agentId, existingConfig => {
-                    const updatedConfig = { ...existingConfig };
+                    if (!existingConfig.topics || !Array.isArray(existingConfig.topics)) {
+                        return existingConfig;
+                    }
+                    const updatedConfig = { ...existingConfig, topics: [...existingConfig.topics] };
                     const topicIndex = updatedConfig.topics.findIndex(t => t.id === topicId);
                     if (topicIndex !== -1) {
-                        updatedConfig.topics[topicIndex].name = newTitle;
+                        updatedConfig.topics[topicIndex] = { ...updatedConfig.topics[topicIndex], name: newTitle };
                     }
                     return updatedConfig;
                 });
-                // 重新读取配置以获取最新的topics
                 const updatedConfig = await agentConfigManager.readAgentConfig(agentId);
                 return { success: true, topics: updatedConfig.topics };
             } else {
-                config.topics[topicIndex].name = newTitle;
-                await fs.writeJson(configPath, config, { spaces: 2 });
-                return { success: true, topics: config.topics };
+                console.error(`AgentConfigManager not available, cannot safely save topic title for agent ${agentId}`);
+                return { error: 'AgentConfigManager 未初始化，无法安全保存话题标题。' };
             }
-            return { success: true, topics: config.topics }; 
         } catch (error) {
             console.error(`保存Agent ${agentId} 话题 ${topicId} 标题为 "${newTitle}" 失败:`, error);
             return { error: error.message };
@@ -218,36 +195,38 @@ function initialize(mainWindow, context) {
 
     ipcMain.handle('get-agent-topics', async (event, agentId) => {
         try {
-            const configPath = path.join(AGENT_DIR, agentId, 'config.json');
-            if (await fs.pathExists(configPath)) {
-                // 增加更稳健的读取和错误处理
-                let config;
+            let config;
+            if (agentConfigManager) {
                 try {
-                    config = await fs.readJson(configPath);
+                    config = await agentConfigManager.readAgentConfig(agentId, { allowDefault: true });
                 } catch (readError) {
-                    console.error(`读取Agent ${agentId} 的 config.json 失败:`, readError);
-                    // 返回一个带错误的数组，让前端知道出了问题，而不是覆盖它
+                    console.error(`读取Agent ${agentId} 的配置失败 (get-agent-topics):`, readError);
                     return { error: `读取配置文件失败: ${readError.message}` };
                 }
-    
-                // 仅当 topics 确实存在且为数组时返回它，否则返回空数组
-                if (config && config.topics && Array.isArray(config.topics)) {
-                    // Part A: 历史数据兼容处理 - 自动为缺少新字段的话题添加默认值
-                    const normalizedTopics = config.topics.map(topic => ({
-                        ...topic,
-                        locked: topic.locked !== undefined ? topic.locked : true,
-                        unread: topic.unread !== undefined ? topic.unread : false,
-                        creatorSource: topic.creatorSource || 'unknown'
-                    }));
-                    return normalizedTopics;
+            } else {
+                const configPath = path.join(AGENT_DIR, agentId, 'config.json');
+                if (await fs.pathExists(configPath)) {
+                    try {
+                        config = await fs.readJson(configPath);
+                    } catch (readError) {
+                        console.error(`读取Agent ${agentId} 的 config.json 失败:`, readError);
+                        return { error: `读取配置文件失败: ${readError.message}` };
+                    }
                 }
-                // 如果没有 topics 字段或格式不正确，返回空数组，让前端处理
-                return [];
             }
-            // 如果配置文件不存在，也返回空数组
+
+            if (config && config.topics && Array.isArray(config.topics)) {
+                // Part A: 历史数据兼容处理 - 自动为缺少新字段的话题添加默认值
+                const normalizedTopics = config.topics.map(topic => ({
+                    ...topic,
+                    locked: topic.locked !== undefined ? topic.locked : true,
+                    unread: topic.unread !== undefined ? topic.unread : false,
+                    creatorSource: topic.creatorSource || 'unknown'
+                }));
+                return normalizedTopics;
+            }
             return [];
         } catch (error) {
-            // 捕获 fs.pathExists 等操作的意外错误
             console.error(`获取Agent ${agentId} 话题列表时发生意外错误:`, error);
             return { error: error.message };
         }
@@ -255,54 +234,41 @@ function initialize(mainWindow, context) {
 
     ipcMain.handle('create-new-topic-for-agent', async (event, agentId, topicName, isBranch = false, locked = true) => {
         try {
-            const configPath = path.join(AGENT_DIR, agentId, 'config.json');
-            if (!await fs.pathExists(configPath)) return { error: `Agent ${agentId} 的配置文件不存在。` };
-            
-            let config;
-            try {
-                config = await fs.readJson(configPath);
-            } catch (e) {
-                console.error(`读取Agent ${agentId} 配置文件失败 (create-new-topic-for-agent):`, e);
-                return { error: `读取配置文件失败: ${e.message}` };
-            }
-            // 增加对损坏配置的检查
-            if (config.topics && !Array.isArray(config.topics)) {
-                console.error(`Agent ${agentId} 的配置文件已损坏: 'topics' 字段不是一个数组。`);
-                return { error: `配置文件已损坏: 'topics' 字段不是一个数组。` };
-            }
-            // 如果 'topics' 字段不存在，则安全地创建它
-            if (!config.topics) {
-                config.topics = [];
-            }
-
             const newTopicId = `topic_${Date.now()}`;
             const timestamp = Date.now();
-            const newTopic = {
-                id: newTopicId,
-                name: topicName || `新话题 ${config.topics.length + 1}`,
-                createdAt: timestamp,
-                locked: locked,              // Part A: 新增锁定状态，默认 true
-                unread: false,               // Part A: 新增未读标记，默认 false
-                creatorSource: "ui"          // Part A: 新增创建来源，UI创建标记为 "ui"
-            };
-            
+
             if (agentConfigManager) {
-                const result = await agentConfigManager.updateAgentConfig(agentId, existingConfig => ({
+                // 先读取当前配置以确定话题命名序号
+                const currentConfig = await agentConfigManager.readAgentConfig(agentId, { allowDefault: true });
+                if (currentConfig.topics && !Array.isArray(currentConfig.topics)) {
+                    return { error: `配置文件已损坏: 'topics' 字段不是一个数组。` };
+                }
+                const existingTopics = currentConfig.topics || [];
+
+                const newTopic = {
+                    id: newTopicId,
+                    name: topicName || `新话题 ${existingTopics.length + 1}`,
+                    createdAt: timestamp,
+                    locked: locked,
+                    unread: false,
+                    creatorSource: "ui"
+                };
+
+                await agentConfigManager.updateAgentConfig(agentId, existingConfig => ({
                     ...existingConfig,
                     topics: [newTopic, ...(existingConfig.topics || [])]
                 }));
                 const updatedConfig = await agentConfigManager.readAgentConfig(agentId);
-                config.topics = updatedConfig.topics;
+
+                const topicHistoryDir = path.join(USER_DATA_DIR, agentId, 'topics', newTopicId);
+                await fs.ensureDir(topicHistoryDir);
+                await fs.writeJson(path.join(topicHistoryDir, 'history.json'), [], { spaces: 2 });
+
+                return { success: true, topicId: newTopicId, topicName: newTopic.name, topics: updatedConfig.topics };
             } else {
-                config.topics.unshift(newTopic);
-                await fs.writeJson(configPath, config, { spaces: 2 });
+                console.error(`AgentConfigManager not available, cannot safely create topic for agent ${agentId}`);
+                return { error: 'AgentConfigManager 未初始化，无法安全创建话题。' };
             }
-
-            const topicHistoryDir = path.join(USER_DATA_DIR, agentId, 'topics', newTopicId);
-            await fs.ensureDir(topicHistoryDir);
-            await fs.writeJson(path.join(topicHistoryDir, 'history.json'), [], { spaces: 2 });
-
-            return { success: true, topicId: newTopicId, topicName: newTopic.name, topics: config.topics };
         } catch (error) {
             console.error(`为Agent ${agentId} 创建新话题失败:`, error);
             return { error: error.message };
@@ -311,47 +277,44 @@ function initialize(mainWindow, context) {
 
     ipcMain.handle('delete-topic', async (event, agentId, topicIdToDelete) => {
         try {
-            const configPath = path.join(AGENT_DIR, agentId, 'config.json');
-            if (!await fs.pathExists(configPath)) return { error: `Agent ${agentId} 的配置文件不存在。` };
-            
-            let config;
-            try {
-                config = await fs.readJson(configPath);
-            } catch (e) {
-                console.error(`读取Agent ${agentId} 配置文件失败 (delete-topic):`, e);
-                return { error: `读取配置文件失败: ${e.message}` };
-            }
-            if (!config.topics || !Array.isArray(config.topics)) {
-                console.error(`删除Agent ${agentId} 的话题失败: 配置文件损坏或缺少话题列表。`);
-                return { error: `配置文件损坏或缺少话题列表。` };
-            }
-
-            const initialTopicCount = config.topics.length;
-            config.topics = config.topics.filter(topic => topic.id !== topicIdToDelete);
-
-            if (config.topics.length === initialTopicCount) return { error: `未找到要删除的话题 ID: ${topicIdToDelete}` };
-
-            if (config.topics.length === 0) {
-                const defaultTopic = { id: "default", name: "主要对话", createdAt: Date.now() };
-                config.topics.push(defaultTopic);
-                const defaultTopicHistoryDir = path.join(USER_DATA_DIR, agentId, 'topics', defaultTopic.id);
-                await fs.ensureDir(defaultTopicHistoryDir);
-                await fs.writeJson(path.join(defaultTopicHistoryDir, 'history.json'), [], { spaces: 2 });
-            }
-
             if (agentConfigManager) {
-                await agentConfigManager.updateAgentConfig(agentId, existingConfig => ({
-                    ...existingConfig,
-                    topics: config.topics
-                }));
+                // 先读取当前配置进行验证
+                const currentConfig = await agentConfigManager.readAgentConfig(agentId);
+                if (!currentConfig.topics || !Array.isArray(currentConfig.topics)) {
+                    return { error: `配置文件损坏或缺少话题列表。` };
+                }
+                if (!currentConfig.topics.some(t => t.id === topicIdToDelete)) {
+                    return { error: `未找到要删除的话题 ID: ${topicIdToDelete}` };
+                }
+
+                let remainingTopics;
+                await agentConfigManager.updateAgentConfig(agentId, existingConfig => {
+                    let filtered = (existingConfig.topics || []).filter(topic => topic.id !== topicIdToDelete);
+                    if (filtered.length === 0) {
+                        filtered = [{ id: "default", name: "主要对话", createdAt: Date.now() }];
+                    }
+                    remainingTopics = filtered;
+                    return { ...existingConfig, topics: filtered };
+                });
+
+                // 如果删空了并创建了默认话题，确保其 history 目录存在
+                if (remainingTopics.length === 1 && remainingTopics[0].id === 'default') {
+                    const defaultTopicHistoryDir = path.join(USER_DATA_DIR, agentId, 'topics', 'default');
+                    await fs.ensureDir(defaultTopicHistoryDir);
+                    const historyPath = path.join(defaultTopicHistoryDir, 'history.json');
+                    if (!await fs.pathExists(historyPath)) {
+                        await fs.writeJson(historyPath, [], { spaces: 2 });
+                    }
+                }
+
+                const topicDataDir = path.join(USER_DATA_DIR, agentId, 'topics', topicIdToDelete);
+                if (await fs.pathExists(topicDataDir)) await fs.remove(topicDataDir);
+
+                return { success: true, remainingTopics };
             } else {
-                await fs.writeJson(configPath, config, { spaces: 2 });
+                console.error(`AgentConfigManager not available, cannot safely delete topic for agent ${agentId}`);
+                return { error: 'AgentConfigManager 未初始化，无法安全删除话题。' };
             }
-
-            const topicDataDir = path.join(USER_DATA_DIR, agentId, 'topics', topicIdToDelete);
-            if (await fs.pathExists(topicDataDir)) await fs.remove(topicDataDir);
-
-            return { success: true, remainingTopics: config.topics };
         } catch (error) {
             console.error(`删除Agent ${agentId} 的话题 ${topicIdToDelete} 失败:`, error);
             return { error: error.message };
@@ -503,9 +466,9 @@ function initialize(mainWindow, context) {
                         fileTypeHint = 'text/plain';
                     }
                 }
-                
+
                 console.log(`[Main - handle-file-drop] Attempting to store dropped file: ${fileData.name} (Type: ${fileTypeHint}) for Agent: ${agentId}, Topic: ${topicId}`);
-                
+
                 const fileManager = require('../fileManager');
                 const storedFile = await fileManager.storeFile(fileSource, fileData.name, agentId, topicId, fileTypeHint);
                 storedFilesInfo.push({ success: true, attachment: storedFile, name: fileData.name });
@@ -529,8 +492,8 @@ function initialize(mainWindow, context) {
             const storedFileObject = await fileManager.storeFile(
                 buffer,
                 `pasted_image_${Date.now()}.${imageData.extension}`,
-                NOTES_AGENT_ID, 
-                noteId,         
+                NOTES_AGENT_ID,
+                noteId,
                 `image/${imageData.extension === 'jpg' ? 'jpeg' : imageData.extension}`
             );
             return { success: true, attachment: storedFileObject };
@@ -539,7 +502,7 @@ function initialize(mainWindow, context) {
             return { success: false, error: error.message };
         }
     });
-ipcMain.handle('get-original-message-content', async (event, itemId, itemType, topicId, messageId) => {
+    ipcMain.handle('get-original-message-content', async (event, itemId, itemType, topicId, messageId) => {
         if (!itemId || !itemType || !topicId || !messageId) {
             return { success: false, error: '无效的参数' };
         }
@@ -574,7 +537,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
     ipcMain.handle('send-to-vcp', async (event, vcpUrl, vcpApiKey, messages, modelConfig, messageId, isGroupCall = false, context = null) => {
         console.log(`[Main - sendToVCP] ***** sendToVCP HANDLER EXECUTED for messageId: ${messageId}, isGroupCall: ${isGroupCall} *****`, context);
         const streamChannel = 'vcp-stream-event'; // Use a single, unified channel for all stream events.
-        
+
         // 🔧 数据验证和规范化
         try {
             // 确保messages数组中的content都是正确的格式
@@ -583,7 +546,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                     console.error('[Main - sendToVCP] Invalid message object:', msg);
                     return { role: 'system', content: '[Invalid message]' };
                 }
-                
+
                 // 如果content是对象，尝试提取text字段或转为JSON字符串
                 if (msg.content && typeof msg.content === 'object') {
                     if (msg.content.text) {
@@ -602,20 +565,20 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                         return { ...msg, content: JSON.stringify(msg.content) };
                     }
                 }
-                
+
                 // 确保content是字符串（除非是多模态数组）
                 if (msg.content && !Array.isArray(msg.content) && typeof msg.content !== 'string') {
                     console.warn('[Main - sendToVCP] Converting non-string content to string:', msg.content);
                     return { ...msg, content: String(msg.content) };
                 }
-                
+
                 return msg;
             });
         } catch (validationError) {
             console.error('[Main - sendToVCP] Error validating messages:', validationError);
             return { error: `消息格式验证失败: ${validationError.message}` };
         }
-        
+
         let finalVcpUrl = vcpUrl;
         let settings = {};
         try {
@@ -623,7 +586,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
             if (await fs.pathExists(settingsPath)) {
                 settings = await fs.readJson(settingsPath);
             }
-    
+
             // **强制检查和切换URL**
             if (settings.enableVcpToolInjection === true) {
                 const urlObject = new URL(vcpUrl);
@@ -636,7 +599,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
         } catch (e) {
             console.error(`[Main - sendToVCP] Error reading settings or switching URL: ${e.message}. Proceeding with original URL.`);
         }
-    
+
         try {
             // --- Agent Music Control Injection ---
             if (getMusicState) {
@@ -679,7 +642,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                             messages.unshift({ role: 'system', content: '' });
                             systemMsgIndex = 0;
                         }
-                        
+
                         const finalParts = [];
                         if (topParts.length > 0) finalParts.push(topParts.join('\n'));
                         if (originalContent) finalParts.push(originalContent);
@@ -691,7 +654,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                     console.error('[Agent Music Control] Failed to inject music info:', e);
                 }
             }
-    
+
             // --- Agent Bubble Theme Injection ---
             try {
                 // Settings already loaded, just check the flag
@@ -701,7 +664,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                         messages.unshift({ role: 'system', content: '' });
                         systemMsgIndex = 0;
                     }
-                    
+
                     const injection = '输出规范要求：{{VarDivRender}}';
                     if (!messages[systemMsgIndex].content.includes(injection)) {
                         messages[systemMsgIndex].content += `\n\n${injection}`;
@@ -744,21 +707,21 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                 if (settings.enableContextSanitizer === true) {
                     const sanitizerDepth = settings.contextSanitizerDepth !== undefined ? settings.contextSanitizerDepth : 2;
                     console.log(`[Context Sanitizer] Enabled with depth: ${sanitizerDepth}`);
-                    
+
                     // 只处理非系统消息（排除 system role）
                     const systemMessages = messages.filter(m => m.role === 'system');
                     const nonSystemMessages = messages.filter(m => m.role !== 'system');
-                    
+
                     // 对非系统消息应用净化
                     const sanitizedNonSystemMessages = contextSanitizer.sanitizeMessages(
                         nonSystemMessages,
                         sanitizerDepth,
                         settings.enableThoughtChainInjection === true
                     );
-                    
+
                     // 重新组合消息数组（保持系统消息在最前面）
                     messages = [...systemMessages, ...sanitizedNonSystemMessages];
-                    
+
                     console.log(`[Context Sanitizer] Messages processed successfully`);
                 }
             } catch (sanitizerError) {
@@ -771,7 +734,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
             console.log('VCP API Key:', vcpApiKey ? '已设置' : '未设置');
             console.log('模型配置:', modelConfig);
             if (context) console.log('上下文:', context);
-    
+
             // 🔧 在发送前验证请求体
             const requestBody = {
                 messages: messages,
@@ -779,7 +742,17 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                 stream: modelConfig.stream === true,
                 requestId: messageId
             };
-            
+
+            // 🔥 记录模型使用频率
+            try {
+                if (modelConfig && modelConfig.model) {
+                    const modelUsageTracker = require('../modelUsageTracker');
+                    await modelUsageTracker.recordModelUsage(modelConfig.model);
+                }
+            } catch (e) {
+                console.error('[ModelUsage] Failed to record model usage:', e);
+            }
+
             // 验证JSON可序列化性
             let serializedBody;
             try {
@@ -791,7 +764,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                 console.error('[Main - sendToVCP] Problematic request body:', requestBody);
                 return { error: `请求体序列化失败: ${serializeError.message}` };
             }
-    
+
             const response = await fetch(finalVcpUrl, {
                 method: 'POST',
                 headers: {
@@ -800,7 +773,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                 },
                 body: serializedBody
             });
-    
+
             if (!response.ok) {
                 const errorText = await response.text();
                 console.error(`[Main - sendToVCP] VCP请求失败. Status: ${response.status}, Response Text:`, errorText);
@@ -811,7 +784,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                         errorData = parsedError;
                     }
                 } catch (e) { /* Not JSON, use raw text */ }
-                
+
                 // 🔧 改进错误消息构造，防止 [object Object]
                 let errorMessage = '';
                 if (errorData.message && typeof errorData.message === 'string') {
@@ -830,9 +803,9 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                 } else {
                     errorMessage = '未知服务端错误';
                 }
-                
+
                 const errorMessageToPropagate = `VCP请求失败: ${response.status} - ${errorMessage}`;
-                
+
                 if (modelConfig.stream === true && event && event.sender && !event.sender.isDestroyed()) {
                     // 构造更详细的错误信息
                     let detailedErrorMessage = `服务器返回状态 ${response.status}.`;
@@ -845,7 +818,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                     } else if (errorData && errorData.details && typeof errorData.details === 'string' && errorData.details.length < 200) {
                         detailedErrorMessage += ` 详情: ${errorData.details}`;
                     }
-    
+
                     const errorPayload = { type: 'error', error: `VCP请求失败: ${detailedErrorMessage}`, details: errorData, messageId: messageId };
                     if (context) errorPayload.context = context;
                     event.sender.send(streamChannel, errorPayload);
@@ -858,7 +831,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                 err.status = response.status;
                 throw err;
             }
-    
+
             if (modelConfig.stream === true) {
                 console.log(`VCP响应: 开始流式处理 for ${messageId} on channel ${streamChannel}`);
                 const reader = response.body.getReader();
@@ -877,7 +850,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                             }
 
                             const lines = buffer.split('\n');
-                            
+
                             // 如果流已结束，则处理所有行。否则，保留最后一行（可能不完整）。
                             buffer = done ? '' : lines.pop();
 
@@ -944,7 +917,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                 // so the renderer knows where to save the history.
                 return { response: vcpResponse, context };
             }
-    
+
         } catch (error) {
             console.error('VCP请求错误 (catch block):', error);
             if (modelConfig.stream === true && event && event.sender && !event.sender.isDestroyed()) {
@@ -1013,10 +986,10 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
      */
     function shouldActivateCount(history) {
         if (!history || history.length === 0) return false;
-        
+
         // 过滤掉系统消息
         const nonSystemMessages = history.filter(msg => msg.role !== 'system');
-        
+
         // 必须有且只有一条消息，且该消息是 AI 回复
         return nonSystemMessages.length === 1 && nonSystemMessages[0].role === 'assistant';
     }
@@ -1047,7 +1020,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
         if (topic.unread === true) {
             return -1; // 仅显示小点，不显示数字
         }
-        
+
         return 0; // 不显示
     }
 
@@ -1084,7 +1057,7 @@ ipcMain.handle('get-original-message-content', async (event, itemId, itemType, t
                             }
                         }
                     }
-                    
+
                     // 如果有计数，显示数字
                     if (totalCount > 0) {
                         counts[agentId] = totalCount;

@@ -579,7 +579,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (note) {
             noteTitleInput.value = note.title;
             noteContentInput.value = note.content;
-            renderMarkdown(note.content);
+            
+            // 异步渲染：先让 UI 响应点击（显示标题和文本），再进行重度渲染
+            setTimeout(() => {
+                // 检查在定时器触发时，用户是否还在看这个笔记
+                if (activeNoteId === id) {
+                    renderMarkdown(note.content);
+                }
+            }, 0);
+
             noteTitleInput.disabled = false;
             noteContentInput.disabled = false;
         } else {
@@ -640,9 +648,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- Save & Delete Logic ---
     const debouncedSaveNote = debounce(() => saveCurrentNote(true), 3000);
+    const debouncedRender = debounce((content) => renderMarkdown(content), 300);
+
     noteTitleInput.addEventListener('input', debouncedSaveNote);
     noteContentInput.addEventListener('input', (e) => {
-        renderMarkdown(e.target.value);
+        debouncedRender(e.target.value);
         debouncedSaveNote();
     });
     saveNoteBtn.addEventListener('click', () => saveCurrentNote(false));
@@ -1375,7 +1385,7 @@ function handleListDragEnd(e) {
                         const currentContent = noteContentInput.value;
                         const newContent = `${currentContent.substring(0, selectionStart)}${markdownImage}${currentContent.substring(selectionEnd)}`;
                         noteContentInput.value = newContent;
-                        renderMarkdown(newContent);
+                        debouncedRender(newContent);
                         debouncedSaveNote();
                     } else {
                         console.error('Failed to save pasted image:', result.error);

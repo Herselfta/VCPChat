@@ -40,18 +40,18 @@ let batchTimer = null;
  */
 export function initializeVisibilityOptimizer(chatContainer) {
     chatContainerRef = chatContainer;
-    
+
     if (visibilityObserver) {
         visibilityObserver.disconnect();
     }
-    
+
     // 🔑 关键：注入全局拦截器
     injectGlobalInterceptors();
-    
+
     visibilityObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             const messageItem = entry.target;
-            
+
             if (entry.isIntersecting) {
                 pendingPause.delete(messageItem);
                 pendingResume.add(messageItem);
@@ -60,17 +60,17 @@ export function initializeVisibilityOptimizer(chatContainer) {
                 pendingPause.add(messageItem);
             }
         });
-        
+
         scheduleBatchProcess();
     }, {
         root: chatContainer,
         rootMargin: CONFIG.rootMargin,
         threshold: CONFIG.threshold
     });
-    
+
     // 观察所有现有消息
     chatContainer.querySelectorAll('.message-item').forEach(observeMessage);
-    
+
     console.debug('[VisibilityOptimizer] Initialized with global interceptors');
 }
 
@@ -81,10 +81,10 @@ function injectGlobalInterceptors() {
     // 拦截 Web Animations API
     if (!originalElementAnimate && typeof Element.prototype.animate === 'function') {
         originalElementAnimate = Element.prototype.animate;
-        
-        Element.prototype.animate = function(keyframes, options) {
+
+        Element.prototype.animate = function (keyframes, options) {
             const animation = originalElementAnimate.call(this, keyframes, options);
-            
+
             // 找到所属的消息气泡
             const messageItem = this.closest('.message-item');
             if (messageItem) {
@@ -93,7 +93,7 @@ function injectGlobalInterceptors() {
                     if (!state.webAnimations.includes(animation)) {
                         state.webAnimations.push(animation);
                     }
-                    
+
                     // 如果当前气泡已暂停，立即暂停新动画
                     if (state.isPaused) {
                         // 延迟一帧确保动画初始化完成
@@ -105,10 +105,10 @@ function injectGlobalInterceptors() {
                     }
                 }
             }
-            
+
             return animation;
         };
-        
+
         console.debug('[VisibilityOptimizer] Element.animate interceptor installed');
     }
 }
@@ -118,14 +118,14 @@ function injectGlobalInterceptors() {
  */
 function scheduleBatchProcess() {
     if (batchTimer) return;
-    
+
     batchTimer = setTimeout(() => {
         batchTimer = null;
-        
+
         // 先处理暂停（优先释放资源）
         pendingPause.forEach(pauseMessageAnimations);
         pendingPause.clear();
-        
+
         // 再处理恢复
         pendingResume.forEach(resumeMessageAnimations);
         pendingResume.clear();
@@ -137,7 +137,7 @@ function scheduleBatchProcess() {
  */
 export function observeMessage(messageItem) {
     if (!visibilityObserver || !messageItem) return;
-    
+
     // 初始化状态存储
     if (!messageAnimationStates.has(messageItem)) {
         messageAnimationStates.set(messageItem, {
@@ -153,9 +153,9 @@ export function observeMessage(messageItem) {
             isInitialized: false
         });
     }
-    
+
     const state = messageAnimationStates.get(messageItem);
-    
+
     // [新增] 监听 DOM 变化，防止 AI 延迟插入动态元素
     if (!state.mutationObserver) {
         state.mutationObserver = new MutationObserver((mutations) => {
@@ -175,7 +175,7 @@ export function observeMessage(messageItem) {
                     }
                 });
             });
-            
+
             if (needsRescan) {
                 scanAnimatedElements(messageItem);
                 // 如果当前是暂停状态，新加进来的元素也要立即暂停
@@ -188,7 +188,7 @@ export function observeMessage(messageItem) {
     }
 
     visibilityObserver.observe(messageItem);
-    
+
     // 🔑 延迟扫描，确保脚本已执行完毕
     setTimeout(() => {
         scanAnimatedElements(messageItem);
@@ -201,10 +201,10 @@ export function observeMessage(messageItem) {
 function scanAnimatedElements(messageItem) {
     const state = messageAnimationStates.get(messageItem);
     if (!state) return;
-    
+
     const contentDiv = messageItem.querySelector('.md-content');
     if (!contentDiv) return;
-    
+
     // 1. 🔑 主动扫描所有 Web Animations（包括已经在运行的）
     try {
         const allWebAnims = messageItem.getAnimations({ subtree: true });
@@ -217,7 +217,7 @@ function scanAnimatedElements(messageItem) {
         // getAnimations 可能在某些环境不可用
         console.warn('[VisibilityOptimizer] getAnimations not supported:', e);
     }
-    
+
     // 2. 扫描媒体元素
     state.mediaElements = Array.from(
         contentDiv.querySelectorAll('video, audio')
@@ -232,7 +232,7 @@ function scanAnimatedElements(messageItem) {
     state.gifImages = Array.from(
         contentDiv.querySelectorAll('img[src$=".gif"], img[src$=".webp"]')
     );
-    
+
     // 5. 扫描 canvas 元素（用于 rAF 动画识别）
     const canvases = contentDiv.querySelectorAll('canvas');
     canvases.forEach(canvas => {
@@ -247,9 +247,9 @@ function scanAnimatedElements(messageItem) {
             });
         }
     });
-    
+
     state.isInitialized = true;
-    
+
     const stats = {
         webAnims: state.webAnimations.length,
         anime: state.animeInstances.length,
@@ -259,7 +259,7 @@ function scanAnimatedElements(messageItem) {
         svg: state.svgElements.length,
         gifs: state.gifImages.length
     };
-    
+
     // 只在有动画内容时输出日志
     const total = Object.values(stats).reduce((a, b) => a + b, 0);
     if (total > 0) {
@@ -301,7 +301,7 @@ function cleanupFinishedAnimations(state) {
 export function pauseMessageAnimations(messageItem) {
     const state = messageAnimationStates.get(messageItem);
     if (!state || state.isPaused) return;
-    
+
     // 首次暂停时确保已扫描
     if (!state.isInitialized) {
         scanAnimatedElements(messageItem);
@@ -317,7 +317,7 @@ export function pauseMessageAnimations(messageItem) {
             messageItem.style.containIntrinsicSize = `auto ${height}px`;
         }
     }
-    
+
     applyPauseToState(messageItem, state);
     state.isPaused = true;
 }
@@ -328,7 +328,7 @@ export function pauseMessageAnimations(messageItem) {
 function applyPauseToState(messageItem, state) {
     // 1. CSS 动画：添加暂停类
     messageItem.classList.add('vcp-paused');
-    
+
     // 2. Web Animations API
     // 重新扫描以捕获新创建的动画
     try {
@@ -338,8 +338,8 @@ function applyPauseToState(messageItem, state) {
                 state.webAnimations.push(anim);
             }
         });
-    } catch (e) {}
-    
+    } catch (e) { }
+
     state.webAnimations.forEach(anim => {
         try {
             if (anim.playState === 'running') {
@@ -354,9 +354,9 @@ function applyPauseToState(messageItem, state) {
             if (anim && !anim.paused) {
                 anim.pause();
             }
-        } catch (e) {}
+        } catch (e) { }
     });
-    
+
     // 4. Three.js 渲染循环
     state.threeContexts.forEach(ctx => {
         if (!ctx.isPaused) {
@@ -369,7 +369,7 @@ function applyPauseToState(messageItem, state) {
             ctx.isPaused = true;
         }
     });
-    
+
     // 5. Canvas + rAF 动画
     state.canvasContexts.forEach(ctx => {
         if (!ctx.isPaused) {
@@ -381,7 +381,7 @@ function applyPauseToState(messageItem, state) {
             ctx.isPaused = true;
         }
     });
-    
+
     // 6. 视频/音频
     state.mediaElements.forEach(media => {
         if (media.isConnected && !media.paused) {
@@ -394,7 +394,7 @@ function applyPauseToState(messageItem, state) {
     state.svgElements.forEach(svg => {
         try {
             if (svg.pauseAnimations) svg.pauseAnimations();
-        } catch (e) {}
+        } catch (e) { }
     });
 
     // 8. [新增] GIF/WebP 动图
@@ -411,17 +411,17 @@ function applyPauseToState(messageItem, state) {
 export function resumeMessageAnimations(messageItem) {
     const state = messageAnimationStates.get(messageItem);
     if (!state || !state.isPaused) return;
-    
+
     // 1. 恢复 CSS 动画：移除暂停类
     messageItem.classList.remove('vcp-paused');
-    
+
     // 2. 恢复 Web Animations API
     state.webAnimations.forEach(anim => {
         try {
             if (anim.playState === 'paused') {
                 anim.play();
             }
-        } catch (e) {}
+        } catch (e) { }
     });
 
     // 3. anime.js 实例
@@ -430,9 +430,9 @@ export function resumeMessageAnimations(messageItem) {
             if (anim?.paused) {
                 anim.play();
             }
-        } catch (e) {}
+        } catch (e) { }
     });
-    
+
     // 4. Three.js 渲染循环
     state.threeContexts.forEach(ctx => {
         if (ctx.isPaused) {
@@ -442,7 +442,7 @@ export function resumeMessageAnimations(messageItem) {
             }
         }
     });
-    
+
     // 5. Canvas + rAF 动画
     state.canvasContexts.forEach(ctx => {
         if (ctx.isPaused) {
@@ -454,11 +454,11 @@ export function resumeMessageAnimations(messageItem) {
             ctx.isPaused = false;
         }
     });
-    
+
     // 6. 视频/音频
     state.mediaElements.forEach(media => {
         if (media.isConnected && media.dataset.vcpWasPlaying === 'true') {
-            media.play().catch(() => {});
+            media.play().catch(() => { });
             delete media.dataset.vcpWasPlaying;
         }
     });
@@ -467,7 +467,7 @@ export function resumeMessageAnimations(messageItem) {
     state.svgElements.forEach(svg => {
         try {
             if (svg.unpauseAnimations) svg.unpauseAnimations();
-        } catch (e) {}
+        } catch (e) { }
     });
 
     // 8. [新增] GIF/WebP 动图
@@ -476,7 +476,7 @@ export function resumeMessageAnimations(messageItem) {
             img.style.visibility = 'visible';
         }
     });
-    
+
     state.isPaused = false;
 }
 
@@ -485,15 +485,15 @@ export function resumeMessageAnimations(messageItem) {
  */
 export function registerAnimeInstance(messageItem, animeInstance) {
     if (!messageItem || !animeInstance) return;
-    
+
     const state = messageAnimationStates.get(messageItem);
     if (state) {
         if (!state.animeInstances.includes(animeInstance)) {
             state.animeInstances.push(animeInstance);
         }
-        
+
         if (state.isPaused) {
-            try { animeInstance.pause(); } catch (e) {}
+            try { animeInstance.pause(); } catch (e) { }
         }
     }
 }
@@ -503,14 +503,14 @@ export function registerAnimeInstance(messageItem, animeInstance) {
  */
 export function registerThreeContext(messageItem, context) {
     if (!messageItem || !context) return;
-    
+
     const state = messageAnimationStates.get(messageItem);
     if (state) {
         if (!state.threeContexts.includes(context)) {
             context.isPaused = false;
             state.threeContexts.push(context);
         }
-        
+
         if (state.isPaused) {
             if (context.animationId) {
                 cancelAnimationFrame(context.animationId);
@@ -530,7 +530,7 @@ export function registerThreeContext(messageItem, context) {
  */
 export function registerCanvasAnimation(messageItem, context) {
     if (!messageItem || !context?.canvas) return;
-    
+
     const state = messageAnimationStates.get(messageItem);
     if (state) {
         // 查找或创建 canvas 上下文
@@ -543,12 +543,12 @@ export function registerCanvasAnimation(messageItem, context) {
             };
             state.canvasContexts.push(canvasCtx);
         }
-        
+
         // 更新控制回调
         canvasCtx.pauseCallback = context.pauseCallback;
         canvasCtx.resumeCallback = context.resumeCallback;
         canvasCtx.isRegistered = true;
-        
+
         if (state.isPaused && !canvasCtx.isPaused) {
             if (canvasCtx.pauseCallback) {
                 canvasCtx.pauseCallback();
@@ -574,11 +574,17 @@ export function isMessagePaused(messageItem) {
  */
 export function createPausableRAF(messageItem) {
     let rafId = null;
-    
+
     const wrappedRAF = (callback) => {
         return requestAnimationFrame((timestamp) => {
             const state = messageAnimationStates.get(messageItem);
-            if (state?.isPaused) {
+
+            // [Fix] 防止元素被移除后仍在运行动画导致 crash
+            if (!state || !messageItem.isConnected) {
+                return;
+            }
+
+            if (state.isPaused) {
                 // 暂停时轮询
                 rafId = requestAnimationFrame(() => wrappedRAF(callback));
             } else {
@@ -586,7 +592,7 @@ export function createPausableRAF(messageItem) {
             }
         });
     };
-    
+
     return wrappedRAF;
 }
 
@@ -597,7 +603,7 @@ export function unobserveMessage(messageItem) {
     if (visibilityObserver) {
         visibilityObserver.unobserve(messageItem);
     }
-    
+
     const state = messageAnimationStates.get(messageItem);
     if (state) {
         // [新增] 断开 MutationObserver
@@ -611,15 +617,15 @@ export function unobserveMessage(messageItem) {
             if (ctx.animationId) cancelAnimationFrame(ctx.animationId);
             if (ctx.renderer?.dispose) ctx.renderer.dispose();
         });
-        
+
         // 取消所有 Web Animations
         state.webAnimations.forEach(anim => {
-            try { anim.cancel(); } catch (e) {}
+            try { anim.cancel(); } catch (e) { }
         });
-        
+
         messageAnimationStates.delete(messageItem);
     }
-    
+
     pendingPause.delete(messageItem);
     pendingResume.delete(messageItem);
 }
@@ -629,18 +635,18 @@ export function unobserveMessage(messageItem) {
  */
 export function recheckVisibility() {
     if (!chatContainerRef) return;
-    
+
     const containerRect = chatContainerRef.getBoundingClientRect();
     const margin = 200;
-    
+
     chatContainerRef.querySelectorAll('.message-item').forEach(item => {
         const rect = item.getBoundingClientRect();
-        
+
         const isVisible = (
             rect.bottom > containerRect.top - margin &&
             rect.top < containerRect.bottom + margin
         );
-        
+
         if (isVisible) {
             resumeMessageAnimations(item);
         } else {
@@ -657,21 +663,21 @@ export function destroyVisibilityOptimizer() {
         visibilityObserver.disconnect();
         visibilityObserver = null;
     }
-    
+
     // 恢复原始的 Element.animate
     if (originalElementAnimate) {
         Element.prototype.animate = originalElementAnimate;
         originalElementAnimate = null;
     }
-    
+
     if (batchTimer) {
         clearTimeout(batchTimer);
         batchTimer = null;
     }
-    
+
     pendingPause.clear();
     pendingResume.clear();
     chatContainerRef = null;
-    
+
     console.debug('[VisibilityOptimizer] Destroyed');
 }

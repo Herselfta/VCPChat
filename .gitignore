@@ -1,5 +1,8 @@
 gitignore
 
+desktop.ini
+folder_638968653780646778.ico
+
 # 不忽略 .gitignore 文件本身（这是Git的常见实践）
 !.gitignore
 
@@ -15,6 +18,17 @@ node_modules/
 **/.DS_Store
 
 # Rust build artifacts
-rust_audio_engine/target/
-desktop.ini
-folder_638968653780646778.ico
+**/target/
+**/Cargo.lock
+
+# Reports and logs
+**/reports/
+
+# 临时忽略的文件（本地修改，不提交）
+.npmrc
+modules/ipc/chatHandlers.js
+modules/itemListManager.js
+modules/settingsManager.js
+package-lock.json
+package.json
+styles/themes.css

@@ -1,0 +1,80 @@
+{
+    "manifestVersion": "1.0.0",
+    "name": "ScreenPilot",
+    "version": "1.0.0",
+    "displayName": "屏幕视觉与操控",
+    "description": "一个强大的屏幕交互插件，允许AI对任意窗口截图（返回base64和分辨率信息）、通过OCR检测截图中的文本位置、直接点击截图中的文本、模拟鼠标点击操作（支持后台不劫持鼠标）、滚轮滚动操作、以及通过Windows UI Automation API检索窗口内可交互元素的名称和坐标。",
+    "author": "VCPToolBox",
+    "pluginType": "synchronous",
+    "entryPoint": {
+        "type": "python",
+        "command": "python screen_pilot.py"
+    },
+    "communication": {
+        "protocol": "stdio",
+        "timeout": 180000
+    },
+    "configSchema": {
+        "SCREENSHOT_DIR": {
+            "type": "string",
+            "description": "截图持久化保存目录的绝对路径。留空则默认保存到插件目录下的 screenshots/ 子文件夹。",
+            "default": ""
+        },
+        "VISION_API_FORMAT": {
+            "type": "string",
+            "description": "API格式: chat (Gemini/OpenAI的/v1/chat/completions) 或 images (SiliconFlow/Qwen的/images/generations)。",
+            "default": "chat"
+        },
+        "VISION_API_BASE_URL": {
+            "type": "string",
+            "description": "ClickVisual使用的图像编辑API基础地址。chat模式示例: http://192.168.2.179:3106; images模式示例: https://api.siliconflow.cn/v1",
+            "default": ""
+        },
+        "VISION_EDIT_MODEL": {
+            "type": "string",
+            "description": "图像编辑模型名称。chat模式示例: gemini-3-pro-image-preview; images模式示例: Qwen/Qwen-Image-Edit",
+            "default": "gemini-3-pro-image-preview"
+        },
+        "VISION_API_KEY": {
+            "type": "string",
+            "description": "图像编辑API的密钥。",
+            "default": ""
+        }
+    },
+    "capabilities": {
+        "invocationCommands": [
+            {
+                "commandIdentifier": "ScreenCapture",
+                "description": "功能: 对指定窗口或全屏进行截图，返回截图的base64图像数据和分辨率信息（宽×高像素）。可启用OCR检测截图中所有文本的位置和可点击坐标。窗口截图可通过窗口标题模糊匹配或HWND句柄精确指定。\n参数:\n- windowTitle (字符串, 可选): 目标窗口标题的关键词，模糊匹配。不提供此参数和hwnd时默认全屏截图。\n- hwnd (整数, 可选): 目标窗口的HWND句柄值，通过WindowSensor获取。优先级高于windowTitle。\n- ocr (布尔值, 可选, 默认false): 设为true时，截图后自动运行OCR检测所有文本区域，返回每个文本的内容、位置和可点击坐标。非常适合需要了解屏幕内容细节的场景。\n- save (布尔值, 可选, 默认false): 是否将截图保存为文件持久化存储。\n- filename (字符串, 可选): 保存的文件名（不含路径），不提供则自动以时间戳命名。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」ScreenCapture「末」,\nwindowTitle:「始」记事本「末」,\nocr:「始」true「末」\n<<<[END_TOOL_REQUEST]>>>\n\n全屏截图示例:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」ScreenCapture「末」\n<<<[END_TOOL_REQUEST]>>>\n\n支持串行批量调用，格式为 command1, windowTitle1, command2, windowTitle2 等。"
+            },
+            {
+                "commandIdentifier": "ClickAt",
+                "description": "功能: 模拟鼠标点击屏幕上指定的坐标位置。支持双轨制——前台模式（默认）物理移动光标点击；后台模式（background=true）通过Win32消息发送点击事件，不移动物理光标。\n参数:\n- x (整数, 必需): 横坐标（像素）。默认为屏幕绝对坐标；若 relativeToWindow=true 则为窗口内相对坐标。\n- y (整数, 必需): 纵坐标（像素）。同上。\n- button (字符串, 可选, 默认'left'): 鼠标按钮，可选值: left, right, middle。\n- clicks (整数, 可选, 默认1): 点击次数。设为2即双击。\n- hwnd (整数, 可选): 目标窗口HWND句柄。前台模式下先将窗口置于前台再点击；后台模式下直接向窗口发送消息。\n- windowTitle (字符串, 可选): 目标窗口标题关键词（模糊匹配），后台模式可用此参数代替hwnd查找窗口。\n- relativeToWindow (布尔值, 可选, 默认false): 设为true时，(x,y)被视为窗口左上角的相对坐标。\n- background (布尔值, 可选, 默认false): 设为true时启用后台模式——通过Win32 PostMessage发送鼠标事件，不移动物理光标。必须提供hwnd或windowTitle。适合不想打断用户操作的场景。\n调用格式:\n前台点击（原有行为）:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」ClickAt「末」,\nx:「始」500「末」,\ny:「始」300「末」\n<<<[END_TOOL_REQUEST]>>>\n\n后台点击（不劫持鼠标）:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」ClickAt「末」,\nhwnd:「始」12345「末」,\nx:「始」150「末」,\ny:「始」80「末」,\nrelativeToWindow:「始」true「末」,\nbackground:「始」true「末」\n<<<[END_TOOL_REQUEST]>>>"
+            },
+            {
+                "commandIdentifier": "InspectUI",
+                "description": "功能: 通过Windows UI Automation API获取指定窗口内所有可交互UI元素（按钮、编辑框、菜单项等）的名称、类型和屏幕坐标。返回的坐标可直接用于ClickAt指令进行自动化操作。注意：此功能在标准Windows应用（WinForms, WPF, UWP, Win32）上效果最佳；对Electron应用内部网页内容、游戏、自绘UI可能无法获取。\n参数:\n- windowTitle (字符串, 可选): 目标窗口标题关键词。\n- hwnd (整数, 可选): 目标窗口HWND句柄，优先级高于windowTitle。\n- controlType (字符串, 可选): 筛选控件类型，如 Button, Edit, MenuItem, CheckBox, RadioButton, ComboBox, Hyperlink, ListItem, TreeItem, TabItem 等。不提供则返回所有可交互元素。\n- maxDepth (整数, 可选, 默认5): UI元素树最大遍历深度，增大可获取更深层元素但会更慢。\n- maxItems (整数, 可选, 默认50): 返回的最大元素数量。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」InspectUI「末」,\nwindowTitle:「始」记事本「末」,\ncontrolType:「始」Button「末」\n<<<[END_TOOL_REQUEST]>>>"
+            },
+            {
+                "commandIdentifier": "ClickText",
+                "description": "功能: 通过OCR文本识别实现精确点击——自动截图、检测所有文本、找到匹配的文本并点击其中心坐标。这是最推荐的点击方式，比手动估算像素坐标更精确可靠。\n参数:\n- text (字符串, 必需): 要点击的文本内容，如 '确定'、'Save'、'开始菜单' 等。\n- windowTitle (字符串, 可选): 目标窗口标题。不提供则全屏检测。\n- hwnd (整数, 可选): 目标窗口HWND。\n- matchMode (字符串, 可选, 默认'fuzzy'): 文本匹配模式。fuzzy(默认,去除空格标点后包含匹配,对OCR噪声最鲁棒), contains(原始包含匹配), exact(完全匹配), startswith(前缀匹配)。\n- index (整数, 可选, 默认1): 当有多个匹配时，点击第几个（从1开始）。\n- button (字符串, 可选, 默认'left'): 鼠标按钮。\n- clicks (整数, 可选, 默认1): 点击次数。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」ClickText「末」,\ntext:「始」确定「末」\n<<<[END_TOOL_REQUEST]>>>\n\n点击指定窗口内的文本:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」ClickText「末」,\ntext:「始」Save「末」,\nwindowTitle:「始」记事本「末」\n<<<[END_TOOL_REQUEST]>>>"
+            },
+            {
+                "commandIdentifier": "ClickVisual",
+                "description": "功能: 通过图像编辑模型实现视觉语义点击——自动截图、让AI绘图模型将目标元素涂色、通过像素差异定位并点击。适合点击没有文本的图标、按钮图片、游戏内UI等视觉元素。比ClickText慢（需要调用图像编辑API），但能处理任何可视化元素。\n注意: 需要在config.env中配置VISION_API_BASE_URL、VISION_EDIT_MODEL和VISION_API_KEY。\n参数:\n- description (字符串, 必需): 要点击的视觉元素描述，如 '红色技能图标'、'左上角的菜单按钮'、'玩家角色头像' 等。\n- windowTitle (字符串, 可选): 目标窗口标题。\n- hwnd (整数, 可选): 目标窗口HWND。\n- color (字符串, 可选, 默认'纯红色(#FF0000)'): 涂色颜色，用于像素差异检测。\n- button (字符串, 可选, 默认'left'): 鼠标按钮。\n- clicks (整数, 可选, 默认1): 点击次数。\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」ClickVisual「末」,\ndescription:「始」红色技能图标「末」,\nwindowTitle:「始」雷电模拟器「末」\n<<<[END_TOOL_REQUEST]>>>"
+            },
+            {
+                "commandIdentifier": "ScrollAt",
+                "description": "功能: 模拟鼠标滚轮滚动操作。支持双轨制——有窗口句柄/标题时使用后台模式（SendMessage，不移动鼠标）；无窗口信息时使用前台模式（pyautogui，在当前或指定位置滚动）。\n参数:\n- direction (字符串, 必需): 滚动方向，可选值: up（向上）, down（向下）。\n- amount (整数, 可选, 默认3): 滚动的刻度数。1个刻度约等于鼠标滚轮滚一格。\n- hwnd (整数, 可选): 目标窗口HWND。提供后启用后台模式，不劫持鼠标。\n- windowTitle (字符串, 可选): 目标窗口标题关键词（模糊匹配），可代替hwnd。提供后启用后台模式。\n- x (整数, 可选): 滚动位置的X坐标（屏幕绝对坐标）。后台模式下默认使用窗口中心。\n- y (整数, 可选): 滚动位置的Y坐标（屏幕绝对坐标）。后台模式下默认使用窗口中心。\n调用格式:\n后台滚动（不劫持鼠标，推荐）:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」ScrollAt「末」,\ndirection:「始」down「末」,\namount:「始」5「末」,\nwindowTitle:「始」Chrome「末」\n<<<[END_TOOL_REQUEST]>>>\n\n前台滚动（在当前鼠标位置）:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」ScrollAt「末」,\ndirection:「始」up「末」,\namount:「始」3「末」\n<<<[END_TOOL_REQUEST]>>>"
+            },
+            {
+                "commandIdentifier": "TypeText",
+                "description": "功能: 向目标窗口输入文本。支持双轨制——有窗口句柄/标题时使用后台模式（PostMessage WM_CHAR逐字发送，不劫持键盘焦点）；无窗口信息时使用前台模式（剪贴板Ctrl+V粘贴，支持全Unicode/中文）。\n参数:\n- text (字符串, 必需): 要输入的文本内容。\n- hwnd (整数, 可选): 目标窗口HWND。提供后启用后台模式。\n- windowTitle (字符串, 可选): 目标窗口标题关键词（模糊匹配），可代替hwnd。\n- enter (布尔值, 可选, 默认false): 设为true时，输入文本后自动按下回车键。适合搜索框、命令行等场景。\n调用格式:\n后台输入（不劫持键盘）:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」TypeText「末」,\ntext:「始」Hello World「末」,\nwindowTitle:「始」记事本「末」,\nenter:「始」true「末」\n<<<[END_TOOL_REQUEST]>>>\n\n前台输入（剪贴板粘贴）:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」TypeText「末」,\ntext:「始」你好世界「末」\n<<<[END_TOOL_REQUEST]>>>"
+            },
+            {
+                "commandIdentifier": "QueryWindows",
+                "description": "功能: 主动查询当前电脑的最新窗口状态、进程名、HWND及标题。由于系统被动扫描有间隔，如果要进行精确操作前担心窗口状态已变，可先调用此指令获取最新实时窗口列表。\n参数: 无\n调用格式:\n<<<[TOOL_REQUEST]>>>\ntool_name:「始」ScreenPilot「末」,\ncommand:「始」QueryWindows「末」\n<<<[END_TOOL_REQUEST]>>>"
+            }
+        ]
+    }
+}

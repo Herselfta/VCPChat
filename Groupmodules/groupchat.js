@@ -128,6 +128,30 @@ async function getVcpGlobalSettings() {
     };
 }
 
+/**
+ * Resolve the model that should be used for this agent in group chat.
+ * When unified model is enabled, it has priority over per-agent model.
+ * @param {object} groupConfig
+ * @param {object} agentConfig
+ * @returns {{usingUnifiedModel: boolean, unifiedModel: string, agentModel: string, effectiveModel: string}}
+ */
+function resolveEffectiveModel(groupConfig, agentConfig) {
+    const usingUnifiedModel = groupConfig && groupConfig.useUnifiedModel === true;
+    const unifiedModel = (groupConfig && typeof groupConfig.unifiedModel === 'string')
+        ? groupConfig.unifiedModel.trim()
+        : '';
+    const agentModel = (agentConfig && typeof agentConfig.model === 'string')
+        ? agentConfig.model.trim()
+        : '';
+
+    return {
+        usingUnifiedModel,
+        unifiedModel,
+        agentModel,
+        effectiveModel: usingUnifiedModel ? unifiedModel : agentModel
+    };
+}
+
 
 
 /**
@@ -157,6 +181,7 @@ async function createAgentGroup(groupName, initialConfig = {}) {
             avatarCalculatedColor: null, // 新增：用于存储头像计算出的颜色
             members: [],
             mode: 'sequential', // 可选: 'sequential', 'naturerandom', 'invite_only'
+            tagMatchMode: 'strict', // 可选: 'strict'(原始行为), 'natural'(智能触发，区分tag来源)
             memberTags: {},
             groupPrompt: '',
             invitePrompt: '现在轮到你{{VCPChatAgentName}}发言了。系统已经为大家添加[xxx的发言：]这样的标记头，以用于区分不同发言来自谁。大家不用自己再输出自己的发言标记头，也不需要讨论发言标记系统，正常聊天即可。',
@@ -272,6 +297,19 @@ async function saveAgentGroupConfig(groupId, configData) {
         const { avatarUrl, ...dataToSave } = configData; 
 
         const newConfigData = { ...existingConfig, ...dataToSave, id: groupId };
+
+        // Backend guard: unified model mode must have a non-empty model id.
+        if (newConfigData.useUnifiedModel === true) {
+            const normalizedUnifiedModel = typeof newConfigData.unifiedModel === 'string'
+                ? newConfigData.unifiedModel.trim()
+                : '';
+            if (!normalizedUnifiedModel) {
+                return { success: false, error: '启用群组统一模型时，群组统一模型不能为空。' };
+            }
+            newConfigData.unifiedModel = normalizedUnifiedModel;
+        } else if (typeof newConfigData.unifiedModel === 'string') {
+            newConfigData.unifiedModel = newConfigData.unifiedModel.trim();
+        }
         
         await fs.writeJson(configPath, newConfigData, { spaces: 2 });
         console.log(`[GroupChat] AgentGroup ${groupId} 配置已保存。`);
@@ -589,8 +627,23 @@ ${att._fileManagerData.extractedText}
         }
         // --- End of Injection ---
 
-        if (!globalVcpSettings.vcpUrl || !agentConfig.model) {
-            const errorMsg = `Agent ${agentName} (${agentId}) 无法响应：VCP URL 或模型未配置。`;
+        const modelResolution = resolveEffectiveModel(groupConfig, agentConfig);
+        if (!globalVcpSettings.vcpUrl) {
+            const errorMsg = `Agent ${agentName} (${agentId}) 无法响应：VCP URL 未配置。`;
+            console.error(`[GroupChat] ${errorMsg}`);
+            const errorResponse = { role: 'assistant', name: agentName, agentId: agentId, content: `[系统消息] ${errorMsg}`, timestamp: Date.now(), id: messageIdForAgentResponse };
+            groupHistory.push(errorResponse);
+            if (typeof sendStreamChunkToRenderer === 'function') {
+                sendStreamChunkToRenderer({ type: 'error', error: errorMsg, messageId: messageIdForAgentResponse, context: { groupId, topicId, agentId, agentName, isGroupMessage: true } });
+            }
+            continue; // 继续处理下一个需要发言的Agent
+        }
+
+        if (!modelResolution.effectiveModel) {
+            const modelHint = modelResolution.usingUnifiedModel
+                ? '已启用群组统一模型，但群组统一模型为空。'
+                : '当前成员未配置模型。';
+            const errorMsg = `Agent ${agentName} (${agentId}) 无法响应：${modelHint}`;
             console.error(`[GroupChat] ${errorMsg}`);
             const errorResponse = { role: 'assistant', name: agentName, agentId: agentId, content: `[系统消息] ${errorMsg}`, timestamp: Date.now(), id: messageIdForAgentResponse };
             groupHistory.push(errorResponse);
@@ -625,7 +678,7 @@ ${att._fileManagerData.extractedText}
             }
 
             const modelConfigForAgent = {
-               model: groupConfig.useUnifiedModel ? groupConfig.unifiedModel : agentConfig.model,
+               model: modelResolution.effectiveModel,
                 temperature: parseFloat(agentConfig.temperature),
                 max_tokens: agentConfig.maxOutputTokens ? parseInt(agentConfig.maxOutputTokens) : undefined,
                 stream: agentConfig.streamOutput === true || String(agentConfig.streamOutput) === 'true'
@@ -1075,8 +1128,24 @@ ${att._fileManagerData.extractedText}
     }
     // --- End of Injection ---
 
-    if (!globalVcpSettings.vcpUrl || !agentConfig.model) {
-        const errorMsg = `Agent ${agentName} (${invitedAgentId}) 无法响应（邀请）：VCP URL 或模型未配置。`;
+    const modelResolution = resolveEffectiveModel(groupConfig, agentConfig);
+    if (!globalVcpSettings.vcpUrl) {
+        const errorMsg = `Agent ${agentName} (${invitedAgentId}) 无法响应（邀请）：VCP URL 未配置。`;
+        console.error(`[GroupChat Invite] ${errorMsg}`);
+        const errorResponse = { role: 'assistant', name: agentName, agentId: invitedAgentId, content: `[系统消息] ${errorMsg}`, timestamp: Date.now(), id: messageIdForAgentResponse };
+        groupHistory.push(errorResponse);
+        await fs.writeJson(groupHistoryPath, groupHistory, { spaces: 2 });
+        if (typeof sendStreamChunkToRenderer === 'function') {
+            sendStreamChunkToRenderer({ type: 'error', error: errorMsg, messageId: messageIdForAgentResponse, context: { groupId, topicId, agentId: invitedAgentId, agentName, isGroupMessage: true } });
+        }
+        return;
+    }
+
+    if (!modelResolution.effectiveModel) {
+        const modelHint = modelResolution.usingUnifiedModel
+            ? '已启用群组统一模型，但群组统一模型为空。'
+            : '当前成员未配置模型。';
+        const errorMsg = `Agent ${agentName} (${invitedAgentId}) 无法响应（邀请）：${modelHint}`;
         console.error(`[GroupChat Invite] ${errorMsg}`);
         const errorResponse = { role: 'assistant', name: agentName, agentId: invitedAgentId, content: `[系统消息] ${errorMsg}`, timestamp: Date.now(), id: messageIdForAgentResponse };
         groupHistory.push(errorResponse);
@@ -1107,7 +1176,7 @@ ${att._fileManagerData.extractedText}
         }
 
         const modelConfigForAgent = {
-           model: groupConfig.useUnifiedModel ? groupConfig.unifiedModel : agentConfig.model,
+           model: modelResolution.effectiveModel,
             temperature: parseFloat(agentConfig.temperature),
             max_tokens: agentConfig.maxOutputTokens ? parseInt(agentConfig.maxOutputTokens) : undefined,
             stream: agentConfig.streamOutput === true || String(agentConfig.streamOutput) === 'true'
@@ -1523,20 +1592,23 @@ function determineNatureRandomSpeakers(activeMembersConfigs, history, groupConfi
                             ? userMessageEntry.content.toLowerCase()
                             : "";
 
-    // --- 主要修改点：定义并使用上下文进行话题分析 ---
-    const CONTEXT_WINDOW = 8; // 定义上下文窗口大小，例如最近5条消息
-    const recentHistory = history.slice(-CONTEXT_WINDOW);
+    // 修复2：排除最后一项（当前用户消息），contextText 只代表纯历史上下文。
+    // 当前用户消息通过 userMessageText 独立检测，避免与历史上下文混淆，
+    // 防止"旧话题残留在窗口"与"当前消息提及"无法区分的问题。
+    const CONTEXT_WINDOW = 8;
+    const recentHistory = history.slice(-(CONTEXT_WINDOW + 1), -1);
     const contextText = recentHistory
         .map(msg => {
             const rawContent = typeof msg.content === 'string' ? msg.content : (msg.content?.text || '');
-            // 新增：移除发言者标记，避免角色名自我匹配导致循环发言
             return rawContent.replace(/^\[.*?的发言\]:\s*/, '');
         })
-        .join(' \n ') // 使用换行符连接，更清晰
+        .join(' \n ')
         .toLowerCase();
-    // --- 修改结束 ---
 
-    // 优先级1: @角色名 (直接在最新消息中匹配)
+    // 读取发言触发模式，默认 strict（向后兼容）
+    const tagMatchMode = groupConfig.tagMatchMode || 'strict';
+
+    // 优先级1: @角色名 (直接在最新消息中匹配) — 两种模式相同
     activeMembersConfigs.forEach(memberConfig => {
         if (userMessageText.includes(`@${memberConfig.name.toLowerCase()}`)) {
             if (!spokenThisTurn.has(memberConfig.id)) {
@@ -1547,25 +1619,88 @@ function determineNatureRandomSpeakers(activeMembersConfigs, history, groupConfi
         }
     });
 
-    // 优先级2: @角色Tag 或 关键词匹配 Tag (在上下文中匹配)
+    // 优先级2: Tag 匹配 — 行为因模式而异
     activeMembersConfigs.forEach(memberConfig => {
-        if (spokenThisTurn.has(memberConfig.id)) return; // 如果已因@角色名被选中，则跳过
+        if (spokenThisTurn.has(memberConfig.id)) return;
 
         const tagsString = groupConfig.memberTags ? groupConfig.memberTags[memberConfig.id] : '';
-        if (tagsString) {
-            const tags = tagsString.split(/,|，/).map(t => t.trim().toLowerCase()).filter(t => t);
-            // 使用 contextText 进行关键词匹配，但 @tag 还是检查最新消息以示区别
-            if (tags.some(tag => contextText.includes(tag) || userMessageText.includes(`@${tag}`))) {
-                 if (!spokenThisTurn.has(memberConfig.id)) {
+        if (!tagsString) return;
+        const tags = tagsString.split(/,|，/).map(t => t.trim().toLowerCase()).filter(t => t);
+
+        if (tagMatchMode === 'natural') {
+            // Natural 模式：按 tag 来源分档处理
+
+            // 检查 tag 是否出现在历史上其他人（其他 Agent 或历史用户消息）的消息中
+            const tagInHistoricalOtherMessages = recentHistory
+                .filter(msg => msg.agentId !== memberConfig.id)
+                .some(msg => {
+                    const content = (typeof msg.content === 'string'
+                        ? msg.content : (msg.content?.text || ''))
+                        .replace(/^\[.*?的发言\]:\s*/, '')
+                        .toLowerCase();
+                    return tags.some(tag => content.includes(tag));
+                });
+
+            // 修复2：当前用户消息独立检测，是最强的外部信号
+            const tagInCurrentUserMessage = tags.some(tag => userMessageText.includes(tag));
+
+            const tagInOtherMessages = tagInHistoricalOtherMessages || tagInCurrentUserMessage;
+
+            // 检查 tag 是否仅出现在自身历史消息中（自我污染场景）
+            const tagOnlyInOwnMessages = !tagInOtherMessages &&
+                recentHistory
+                    .filter(msg => msg.agentId === memberConfig.id)
+                    .some(msg => {
+                        const content = (typeof msg.content === 'string'
+                            ? msg.content : (msg.content?.text || '')).toLowerCase();
+                        return tags.some(tag => content.includes(tag));
+                    });
+
+            if (tags.some(tag => userMessageText.includes(`@${tag}`))) {
+                // @tag 直接提及 → 强信号，100% 触发
+                speakers.push(memberConfig);
+                spokenThisTurn.add(memberConfig.id);
+                console.log(`[NatureRandom/Natural] @tag trigger for ${memberConfig.name}.`);
+
+            } else if (tagInOtherMessages) {
+                // tag 来自用户或其他 Agent → 话题真实相关，100% 触发
+                speakers.push(memberConfig);
+                spokenThisTurn.add(memberConfig.id);
+                console.log(`[NatureRandom/Natural] Tag in others' messages, triggering ${memberConfig.name}.`);
+
+            } else if (tagOnlyInOwnMessages) {
+                // tag 仅来自自身历史消息 → 动态概率（区分"话题延续"与"自我污染"）
+                const lastAiMsg = [...history].slice(0, -1).reverse()
+                    .find(msg => msg.role === 'assistant');
+                const isLastSpeaker = lastAiMsg?.agentId === memberConfig.id;
+                const ownMsgCount = recentHistory
+                    .filter(msg => msg.agentId === memberConfig.id).length;
+
+                // isLastSpeaker=true: 刚发言，用户可能在延续对话，概率随发言次数递增，上限 0.75
+                // isLastSpeaker=false: 更可能是自我污染，保持低概率
+                const speakChance = isLastSpeaker
+                    ? Math.min(0.5 + ownMsgCount * 0.1, 0.75)
+                    : 0.2;
+
+                if (Math.random() < speakChance) {
                     speakers.push(memberConfig);
                     spokenThisTurn.add(memberConfig.id);
-                    console.log(`[NatureRandom] Tag match for ${memberConfig.name} in recent context (tags: ${tags.join('/')}).`);
+                    console.log(`[NatureRandom/Natural] Self-context trigger for ${memberConfig.name} (isLastSpeaker=${isLastSpeaker}, chance=${speakChance.toFixed(2)}).`);
                 }
+            }
+
+        } else {
+            // Strict 模式：tag 在历史上下文 OR 在当前用户消息 OR @tag → 100% 触发
+            // 修复2：userMessageText.includes(tag) 显式替代原先通过 contextText 捕获当前消息 tag 的方式
+            if (tags.some(tag => contextText.includes(tag) || userMessageText.includes(tag))) {
+                speakers.push(memberConfig);
+                spokenThisTurn.add(memberConfig.id);
+                console.log(`[NatureRandom/Strict] Tag match for ${memberConfig.name}.`);
             }
         }
     });
-    
-    // 优先级3: @所有人 (在最新消息中匹配)
+
+    // 优先级3: @所有人 (在最新消息中匹配) — 两种模式相同
     if (userMessageText.includes('@所有人')) {
         activeMembersConfigs.forEach(memberConfig => {
             if (!spokenThisTurn.has(memberConfig.id)) {
@@ -1576,36 +1711,39 @@ function determineNatureRandomSpeakers(activeMembersConfigs, history, groupConfi
         });
     }
 
-    // 优先级4: 概率发言 (对于未被上述规则触发的)
+    // 优先级4: 概率发言（对于未被上述规则触发的）
+    // 修复1：natural 模式禁用 contextText 提升（P2 已处理所有 tag 相关逻辑）
+    // 若保留，P2 精心校准的概率会被 P4 的 85% 覆盖，导致自我污染场景实际概率高达 88%+
     const nonTriggeredMembers = activeMembersConfigs.filter(member => !spokenThisTurn.has(member.id));
-    const baseRandomSpeakProbability = 0.15; // 10% 的基础概率，避免群里太安静
-    
+    const baseRandomSpeakProbability = 0.15;
+
     nonTriggeredMembers.forEach(memberConfig => {
-        // 检查此成员的tag是否在上下文中，如果是，则提高发言概率
-        const tagsString = groupConfig.memberTags ? groupConfig.memberTags[memberConfig.id] : '';
         let speakChance = baseRandomSpeakProbability;
-        if (tagsString) {
-            const tags = tagsString.split(/,|，/).map(t => t.trim().toLowerCase()).filter(t => t);
-            if (tags.some(tag => contextText.includes(tag))) {
-                speakChance = 0.85; // 如果话题相关，概率大幅提升到 85%
-                console.log(`[NatureRandom] Increased speak probability for relevant agent ${memberConfig.name}.`);
+
+        if (tagMatchMode === 'strict') {
+            // strict 模式保留 contextText 提升（向后兼容）
+            const tagsString = groupConfig.memberTags ? groupConfig.memberTags[memberConfig.id] : '';
+            if (tagsString) {
+                const tags = tagsString.split(/,|，/).map(t => t.trim().toLowerCase()).filter(t => t);
+                if (tags.some(tag => contextText.includes(tag))) {
+                    speakChance = 0.85;
+                    console.log(`[NatureRandom/Strict] Increased speak probability for ${memberConfig.name}.`);
+                }
             }
         }
+        // natural 模式：只用基础 15%，不做 tag 提升
 
         if (Math.random() < speakChance) {
-            if (!spokenThisTurn.has(memberConfig.id)) {
-                speakers.push(memberConfig);
-                spokenThisTurn.add(memberConfig.id);
-                console.log(`[NatureRandom] Random/Probabilistic speak triggered for ${memberConfig.name} with chance ${speakChance.toFixed(2)}.`);
-            }
+            speakers.push(memberConfig);
+            spokenThisTurn.add(memberConfig.id);
+            console.log(`[NatureRandom] Probabilistic speak for ${memberConfig.name} (chance=${speakChance.toFixed(2)}).`);
         }
     });
 
-    // 优先级5: 保底发言 (如果以上都没有触发任何Agent)
+    // 优先级5: 保底发言（如果以上都没有触发任何 Agent）
+    // 修复3：speakers.length === 0 时 spokenThisTurn 必然为空，直接用 activeMembersConfigs，无需冗余过滤
     if (speakers.length === 0 && activeMembersConfigs.length > 0) {
-        // 保底发言也优先选择话题相关的
         const relevantMembers = activeMembersConfigs.filter(m => {
-            if (spokenThisTurn.has(m.id)) return false; // 确保没被选中过
             const tagsString = groupConfig.memberTags ? groupConfig.memberTags[m.id] : '';
             if (!tagsString) return false;
             const tags = tagsString.split(/,|，/).map(t => t.trim().toLowerCase()).filter(t => t);
@@ -1614,53 +1752,33 @@ function determineNatureRandomSpeakers(activeMembersConfigs, history, groupConfi
 
         let fallbackSpeaker;
         if (relevantMembers.length > 0) {
-            // 从相关成员中随机选一个
-            const randomIndex = Math.floor(Math.random() * relevantMembers.length);
-            fallbackSpeaker = relevantMembers[randomIndex];
-            console.log(`[NatureRandom] Fallback speaker triggered (relevant): ${fallbackSpeaker.name}.`);
+            fallbackSpeaker = relevantMembers[Math.floor(Math.random() * relevantMembers.length)];
+            console.log(`[NatureRandom] Fallback speaker (relevant): ${fallbackSpeaker.name}.`);
         } else {
-            // 从所有未发言成员中随机选一个
-            const fallbackCandidates = activeMembersConfigs.filter(m => !spokenThisTurn.has(m.id));
-            if (fallbackCandidates.length > 0) {
-                const randomIndex = Math.floor(Math.random() * fallbackCandidates.length);
-                fallbackSpeaker = fallbackCandidates[randomIndex];
-                console.log(`[NatureRandom] Fallback speaker triggered (random): ${fallbackSpeaker.name}.`);
-            }
+            // 修复3：spokenThisTurn 为空，直接随机选取，无需额外过滤
+            fallbackSpeaker = activeMembersConfigs[Math.floor(Math.random() * activeMembersConfigs.length)];
+            console.log(`[NatureRandom] Fallback speaker (random): ${fallbackSpeaker.name}.`);
         }
         if (fallbackSpeaker) {
             speakers.push(fallbackSpeaker);
         }
     }
-    
-    // --- 新增：优化发言顺序，将Tag在用户最新发言中命中的角色排在最前 ---
+
+    // 排序优化：Tag 在用户最新发言中命中的角色排在最前
     speakers.sort((a, b) => {
         const getRelevance = (memberConfig) => {
             const tagsString = groupConfig.memberTags ? groupConfig.memberTags[memberConfig.id] : '';
             if (!tagsString) return 0;
             const tags = tagsString.split(/,|，/).map(t => t.trim().toLowerCase()).filter(t => t);
-            // 如果tag在最新用户消息中，则相关性最高
-            if (tags.some(tag => userMessageText.includes(tag))) {
-                return 2;
-            }
-            // 如果tag在上下文中，则相关性次之
-            if (tags.some(tag => contextText.includes(tag))) {
-                return 1;
-            }
+            if (tags.some(tag => userMessageText.includes(tag))) return 2;
+            if (tags.some(tag => contextText.includes(tag))) return 1;
             return 0;
         };
-
-        const relevanceA = getRelevance(a);
-        const relevanceB = getRelevance(b);
-
-        // 相关性高的排在前面
-        return relevanceB - relevanceA;
+        return getRelevance(b) - getRelevance(a);
     });
-    
-    console.log(`[NatureRandom] Sorted speakers by relevance. New order: ${speakers.map(s => s.name).join(', ')}`);
-    // --- 排序优化结束 ---
 
-    console.log(`[GroupChat - NatureRandom] Determined speakers: ${speakers.map(s => s.name).join(', ')}`);
-    return speakers; // 返回的是 Agent 配置对象的数组
+    console.log(`[NatureRandom] Mode: ${tagMatchMode}. Speakers: ${speakers.map(s => s.name).join(', ')}`);
+    return speakers;
 }
 
 

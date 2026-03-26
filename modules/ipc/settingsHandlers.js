@@ -42,8 +42,14 @@ function initialize(paths) {
     ipcMain.handle('save-settings', async (event, settings) => {
         try {
             // User avatar URL is handled by 'save-user-avatar', remove it from general settings to avoid saving a file path
-            const { userAvatarUrl, ...settingsToSave } = settings;
-            
+            // Also protect order fields from being accidentally overwritten by stale renderer snapshots.
+            const {
+                userAvatarUrl,
+                combinedItemOrder,
+                agentOrder,
+                ...settingsToSave
+            } = settings;
+
             // 确保 flowlockContinueDelay 是一个有效的数字
             if (typeof settingsToSave.flowlockContinueDelay !== 'number' || isNaN(settingsToSave.flowlockContinueDelay)) {
                 settingsToSave.flowlockContinueDelay = 5; // 如果无效，则设置为默认值
@@ -53,7 +59,7 @@ function initialize(paths) {
             if (settingsToSave.enableDistributedServerLogs === undefined) {
                 settingsToSave.enableDistributedServerLogs = false;
             }
-            
+
             const result = await settingsManager.updateSettings(settingsToSave);
             return result;
         } catch (error) {

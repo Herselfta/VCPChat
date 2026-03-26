@@ -24,6 +24,8 @@ let currentSelectedItem = {
 };
 let currentTopicId = null;
 let currentChatHistory = [];
+window.__vcpRendererReady = false;
+window.__vcpPendingTopicSelection = null;
 
 // 暴露到window对象以便其他模块访问
 window.currentSelectedItem = currentSelectedItem;
@@ -382,7 +384,12 @@ import { setupEventListeners } from './modules/event-listeners.js';
                 break;
 
             case 'end':
-                window.messageRenderer.finalizeStreamedMessage(messageId, finish_reason || 'completed', context);
+                window.messageRenderer.finalizeStreamedMessage(
+                    messageId,
+                    finish_reason || 'completed',
+                    context,
+                    { fullResponse, error }
+                );
                 if (context && !context.isGroupMessage) {
                     // This can run in the background
                     await window.chatManager.attemptTopicSummarizationIfNeeded();
@@ -465,7 +472,12 @@ import { setupEventListeners } from './modules/event-listeners.js';
 
             case 'error':
                 console.error('VCP Stream Error on ID', messageId, ':', error, 'Context:', context);
-                window.messageRenderer.finalizeStreamedMessage(messageId, 'error', context);
+                window.messageRenderer.finalizeStreamedMessage(
+                    messageId,
+                    'error',
+                    context,
+                    { fullResponse, error }
+                );
                 
                 // --- Flowlock: 处理错误情况，重置状态并可能触发下一次续写 ---
                 if (window.flowlockManager) {
@@ -974,7 +986,26 @@ import { setupEventListeners } from './modules/event-listeners.js';
         }
 
        // Emoticon URL fixer is now initialized within messageRenderer
+        window.__vcpRendererReady = true;
+
+        window.electronAPI.toggleSelectionListener(!!globalSettings.assistantEnabled);
+
+        if (window.__vcpPendingTopicSelection && window.chatManager) {
+            const pending = window.__vcpPendingTopicSelection;
+            window.__vcpPendingTopicSelection = null;
+            const matchesCurrentItem =
+                currentSelectedItem &&
+                currentSelectedItem.id === pending.itemId &&
+                currentSelectedItem.type === pending.itemType;
+
+            if (matchesCurrentItem) {
+                Promise.resolve(window.chatManager.selectTopic(pending.topicId)).catch((error) => {
+                    console.error('[Renderer] Failed to replay pending topic selection:', error);
+                });
+            }
+        }
     } catch (error) {
+        window.__vcpRendererReady = false;
         console.error('Error during DOMContentLoaded initialization:', error);
         chatMessagesDiv.innerHTML = `<div class="message-item system">初始化失败: ${error.message}</div>`;
     }
@@ -1398,7 +1429,7 @@ async function loadAndApplyGlobalSettings() {
         if (toggleAssistantBtn) {
             toggleAssistantBtn.classList.toggle('active', !!globalSettings.assistantEnabled);
         }
-        window.electronAPI.toggleSelectionListener(!!globalSettings.assistantEnabled);
+        // Selection listener startup moved to post-renderer-ready stage.
 
         // Load filter mode setting
         let filterEnabled = globalSettings.filterEnabled ?? globalSettings.doNotDisturbLogMode ?? (localStorage.getItem('doNotDisturbLogMode') === 'true');
@@ -1434,6 +1465,24 @@ async function syncGlobalSettingsToUI() {
     const safeCheck = (id, checked) => {
         const el = document.getElementById(id);
         if (el) el.checked = !!checked;
+    };
+    const syncRustDebugPanelVisibility = () => {
+        const rustDebugModeEl = document.getElementById('rustDebugMode');
+        const rustDebugPanelEl = document.getElementById('rustDebugPanel');
+        if (rustDebugPanelEl) {
+            rustDebugPanelEl.style.display = rustDebugModeEl?.checked ? 'block' : 'none';
+        }
+    };
+    const joinKeywords = (value) => Array.isArray(value) ? value.join('\n') : '';
+    const shouldShowRustGuardRules = () => {
+        const useRust = document.getElementById('rustUseAssistant')?.checked === true;
+        return useRust;
+    };
+    const syncRustGuardRulesVisibility = () => {
+        const container = document.getElementById('rustGuardRulesContainer');
+        if (container) {
+            container.style.display = shouldShowRustGuardRules() ? 'block' : 'none';
+        }
     };
 
     safeSet('userName', globalSettings.userName || '用户');
@@ -1514,6 +1563,78 @@ async function syncGlobalSettingsToUI() {
     safeCheck('enableMiddleClickAdvanced', globalSettings.enableMiddleClickAdvanced === true);
     safeSet('middleClickAdvancedDelay', Math.max(1000, globalSettings.middleClickAdvancedDelay ?? 1000));
     safeCheck('enableRegenerateConfirmation', globalSettings.enableRegenerateConfirmation !== false);
+
+    if (window.electronAPI?.getRustAssistantConfig) {
+        try {
+            const rustConfig = await window.electronAPI.getRustAssistantConfig();
+            if (rustConfig && !rustConfig.error) {
+                safeCheck('rustUseAssistant', rustConfig.useRustAssistant === true);
+                safeCheck('rustDebugMode', rustConfig.debugMode === true);
+                safeSet('rustWhitelistKeywords', joinKeywords(rustConfig.whitelist || []));
+                safeSet('rustBlacklistKeywords', joinKeywords(rustConfig.blacklist || []));
+                safeSet('rustScreenshotApps', joinKeywords(rustConfig.screenshotApps || []));
+                syncRustDebugPanelVisibility();
+                syncRustGuardRulesVisibility();
+
+                const rustDebugModeEl = document.getElementById('rustDebugMode');
+                if (rustDebugModeEl && !rustDebugModeEl.dataset.debugPanelBound) {
+                    rustDebugModeEl.addEventListener('change', syncRustDebugPanelVisibility);
+                    rustDebugModeEl.dataset.debugPanelBound = 'true';
+                }
+
+                const rustUseAssistantEl = document.getElementById('rustUseAssistant');
+                if (rustUseAssistantEl && !rustUseAssistantEl.dataset.guardPanelBound) {
+                    rustUseAssistantEl.addEventListener('change', syncRustGuardRulesVisibility);
+                    rustUseAssistantEl.dataset.guardPanelBound = 'true';
+                }
+
+            }
+        } catch (error) {
+            console.warn('[Renderer] Failed to sync Rust assistant config:', error);
+        }
+    }
+
+    if (window.electronAPI?.getAssistantRuntimeStatus && document.getElementById('rustDebugMode')?.checked) {
+        try {
+            const runtime = await window.electronAPI.getAssistantRuntimeStatus();
+            if (runtime && runtime.success) {
+                const modeText = runtime.mode === 'rust'
+                    ? 'Rust'
+                    : (runtime.mode === 'disabled' ? 'Disabled' : runtime.mode || 'Unknown');
+                const desiredText = runtime.desiredMode === 'rust'
+                    ? 'Rust'
+                    : (runtime.desiredMode === 'disabled' ? 'Disabled' : runtime.desiredMode || 'Unknown');
+                const activeText = runtime.active ? '运行中' : '未运行';
+                const debugReasonText = runtime.lastDebugReason || '无';
+                const forwardedCount = runtime.forwardedEventCount || 0;
+                const sidecarActiveText = runtime.rustSidecarListenerActive === null
+                    ? '未知'
+                    : (runtime.rustSidecarListenerActive ? '是' : '否');
+                const processAliveText = runtime.adapterProcessAlive ? '运行中' : '未运行';
+                const processPidText = runtime.adapterProcessPid ? String(runtime.adapterProcessPid) : '无';
+                const autoFallbackCount = runtime.runtimeFallbackTrace?.autoFallbackCount || 0;
+                const autoFallbackReason = runtime.runtimeFallbackTrace?.lastAutoFallbackReason || '无';
+                const receivedCount = runtime.integrationTrace?.receivedSelectionCount || 0;
+                const showAttemptCount = runtime.integrationTrace?.showAttemptCount || 0;
+                const showErrorText = runtime.integrationTrace?.lastShowError || '无';
+                safeSet('assistantRuntimeMode', modeText, 'textContent');
+                safeSet('assistantRuntimeDesiredMode', desiredText, 'textContent');
+                safeSet('assistantRuntimeActive', activeText, 'textContent');
+                safeSet('assistantRuntimeDebugReason', debugReasonText, 'textContent');
+                safeSet('assistantRuntimeForwardedCount', String(forwardedCount), 'textContent');
+                safeSet('assistantRuntimeSidecarActive', sidecarActiveText, 'textContent');
+                safeSet('assistantRuntimeProcessAlive', processAliveText, 'textContent');
+                safeSet('assistantRuntimeProcessPid', processPidText, 'textContent');
+                safeSet('assistantRuntimeAutoFallbackCount', String(autoFallbackCount), 'textContent');
+                safeSet('assistantRuntimeAutoFallbackReason', autoFallbackReason, 'textContent');
+                safeSet('assistantRuntimeReceivedCount', String(receivedCount), 'textContent');
+                safeSet('assistantRuntimeShowAttemptCount', String(showAttemptCount), 'textContent');
+                safeSet('assistantRuntimeShowError', showErrorText, 'textContent');
+            }
+        } catch (error) {
+            console.warn('[Renderer] Failed to load assistant runtime status:', error);
+        }
+    }
 
     // Visibility toggles
     const middleClickContainer = document.getElementById('middleClickQuickActionContainer');
