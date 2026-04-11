@@ -1,19 +1,27 @@
 /* Promptmodules/prompt-modules.css */
 /* 提示词模块样式 */
 
+.system-prompt-container {
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+    background-color: var(--input-bg);
+}
+
 /* 模式选择器 */
 .prompt-mode-selector {
     display: flex;
     gap: 0;
-    margin-bottom: 20px;
-    border-radius: 8px;
+    margin-bottom: 0;
     overflow: hidden;
-    border: 1px solid var(--border-color);
+    border: none;
+    border-bottom: 1px solid var(--border-color);
+    background-color: var(--secondary-bg);
 }
 
 .prompt-mode-button {
     flex: 1;
-    padding: 10px 15px;
+    padding: 10px 8px;
     background-color: var(--secondary-bg);
     border: none;
     color: var(--secondary-text);
@@ -21,6 +29,10 @@
     font-size: 0.95em;
     transition: all 0.2s ease;
     border-right: 1px solid var(--border-color);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
 }
 
 .prompt-mode-button:last-child {
@@ -38,9 +50,29 @@
     font-weight: 500;
 }
 
+.prompt-mode-button-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.prompt-mode-button-icon svg {
+    width: 15px;
+    height: 15px;
+    display: block;
+    stroke: currentColor;
+}
+
+.prompt-mode-button-label {
+    line-height: 1;
+}
+
 /* 内容容器 */
 .prompt-content-container {
-    min-height: 200px;
+    min-height: 0;
+    padding: 0;
+    background-color: var(--input-bg);
 }
 
 /* 通用标签样式 */
@@ -57,14 +89,14 @@
     width: 100%;
     box-sizing: border-box;
     padding: 10px 12px;
-    border-radius: 8px;
+    border-radius: 0 0 8px 8px;
     border: 1px solid var(--border-color);
     background-color: var(--input-bg);
     color: var(--primary-text);
     font-size: 0.95em;
     font-family: inherit;
     resize: vertical;
-    min-height: 120px;
+    min-height: 60px;
     line-height: 1.5;
 }
 
@@ -74,25 +106,31 @@
     box-shadow: 0 0 0 2px rgba(61, 90, 128, 0.3);
 }
 
+.prompt-content-container > .prompt-textarea {
+    border-top: none;
+}
+
 /* ===== 原始富文本模块样式 ===== */
 .original-prompt-textarea {
-    min-height: 150px;
+    min-height: 60px;
 }
 
 /* ===== 模块化系统提示词模块样式 ===== */
 .modular-prompt-container {
     display: flex;
     flex-direction: column;
-    gap: 15px;
+    gap: 12px;
+    padding: 12px;
 }
 
 /* 工具栏 */
 .modular-toolbar {
     display: flex;
     gap: 10px;
-    padding: 10px;
-    background-color: var(--secondary-bg);
-    border-radius: 8px;
+    padding: 0 0 10px 0;
+    background-color: transparent;
+    border-radius: 0;
+    border-bottom: 1px solid var(--border-color);
     flex-wrap: wrap;
     align-items: center;
 }
@@ -109,7 +147,7 @@
     padding: 8px 12px;
     background-color: var(--button-bg);
     border: 1px solid var(--button-bg);
-    color: var(--primary-text);
+    color: var(--text-on-accent);
     border-radius: 6px;
     cursor: pointer;
     font-size: 0.9em;
@@ -117,6 +155,10 @@
     align-items: center;
     gap: 5px;
     transition: all 0.2s ease;
+}
+
+.toolbar-btn svg {
+    stroke: currentColor;
 }
 
 .toolbar-btn:hover {
@@ -148,8 +190,8 @@
 
 /* 积木块容器 */
 .blocks-container {
-    min-height: 200px;
-    padding: 15px;
+    min-height: 80px;
+    padding: 10px;
     background-color: var(--input-bg);
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -168,7 +210,7 @@
     width: 100%;
     text-align: center;
     color: var(--secondary-text);
-    padding: 40px 20px;
+    padding: 18px 14px;
     font-size: 0.95em;
 }
 
@@ -703,7 +745,8 @@
 .preset-prompt-container {
     display: flex;
     flex-direction: column;
-    gap: 15px;
+    gap: 10px;
+    padding: 12px;
 }
 
 .preset-path-section,
@@ -735,7 +778,7 @@
     padding: 9px 15px;
     background-color: var(--button-bg);
     border: 1px solid var(--button-bg);
-    color: var(--primary-text);
+    color: var(--text-on-accent);
     border-radius: 8px;
     cursor: pointer;
     font-size: 0.95em;
@@ -748,6 +791,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+.preset-refresh-btn svg {
+    stroke: currentColor;
 }
 
 .preset-browse-btn:hover,
@@ -774,7 +821,7 @@
 }
 
 .preset-prompt-textarea {
-    min-height: 200px;
+    min-height: 60px;
 }
 
 /* 响应式设计 */

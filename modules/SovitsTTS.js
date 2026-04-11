@@ -1,10 +1,10 @@
 const axios = require('axios');
 const fs = require('fs').promises;
 const path = require('path');
-const { app } = require('electron');
 const crypto = require('crypto');
 
-const SOVITS_API_BASE_URL = "http://127.0.0.1:8000";
+const DEFAULT_SOVITS_API_BASE_URL = "http://127.0.0.1:8000";
+const DEFAULT_NETWORK_TTS_MODEL = 'IndexTeam/IndexTTS-2';
 // 修正路径问题，确保缓存和模型列表都在项目内的AppData目录
 const PROJECT_ROOT = path.join(__dirname, '..'); // 更可靠的方式获取项目根目录
 const APP_DATA_ROOT_IN_PROJECT = path.join(PROJECT_ROOT, 'AppData');
@@ -12,12 +12,52 @@ const MODELS_CACHE_PATH = path.join(APP_DATA_ROOT_IN_PROJECT, 'sovits_models.jso
 const TTS_CACHE_DIR = path.join(APP_DATA_ROOT_IN_PROJECT, 'tts_cache');
 
 class SovitsTTS {
-    constructor() {
+    constructor(settingsManager = null) {
+        this.settingsManager = settingsManager;
         this.isSpeaking = false;
         this.speechQueue = [];
         this.currentSpeechItemId = null; // 用于跟踪当前朗读的气泡ID
         this.sessionId = 0; // 新增：会话ID，用于作废过时的播放事件
         this.initCacheDir();
+    }
+
+    async getRuntimeConfig() {
+        let settings = null;
+        try {
+            settings = this.settingsManager?.readSettings
+                ? await this.settingsManager.readSettings()
+                : null;
+        } catch (error) {
+            console.warn('[TTS] Failed to read global settings, using default Sovits config:', error.message);
+        }
+
+        const voiceMode = settings?.voiceMode || 'local';
+        const localSovitsConfig = settings?.voiceNetworkSettings || {};
+        const networkProviderConfig = settings?.voiceLocalSettings || {};
+
+        const baseUrl = voiceMode === 'network'
+            ? ((networkProviderConfig.providerUrl || '').trim() || DEFAULT_SOVITS_API_BASE_URL)
+            : ((localSovitsConfig.sovitsUrl || '').trim() || DEFAULT_SOVITS_API_BASE_URL);
+
+        const apiKey = voiceMode === 'network'
+            ? (networkProviderConfig.providerKey || '')
+            : (localSovitsConfig.sovitsKey || '');
+
+        const normalizedBaseUrl = baseUrl.replace(/\/+$/, '');
+
+        return {
+            voiceMode,
+            baseUrl: normalizedBaseUrl,
+            apiKey
+        };
+    }
+
+    buildHeaders(apiKey = '') {
+        const headers = {};
+        if (apiKey) {
+            headers.Authorization = `Bearer ${apiKey}`;
+        }
+        return headers;
     }
 
     async initCacheDir() {
@@ -34,19 +74,93 @@ class SovitsTTS {
      * @returns {Promise<Object>} 模型列表
      */
     async getModels(forceRefresh = false) {
+        const normalizeNetworkVoiceItems = (items) => {
+            if (!Array.isArray(items)) {
+                return [];
+            }
+
+            return items.map(item => ({
+                id: item?.id || item?.uri || item?.voice,
+                voice: item?.voice || item?.uri || item?.id,
+                displayName: item?.displayName || item?.customName || item?.name || item?.voice || item?.uri || item?.id,
+                uri: item?.uri || item?.voice || item?.id || '',
+                type: item?.type || 'remote',
+                raw: item?.raw || item
+            })).filter(item => item.voice);
+        };
+
+        const extractNetworkModelsFromCache = (payload) => {
+            if (Array.isArray(payload)) {
+                return normalizeNetworkVoiceItems(payload);
+            }
+
+            if (Array.isArray(payload?.mergedVoiceOptions)) {
+                return normalizeNetworkVoiceItems(payload.mergedVoiceOptions);
+            }
+
+            if (Array.isArray(payload?.models)) {
+                const flattened = payload.models.flatMap(model => {
+                    if (Array.isArray(model?.mergedVoiceOptions) && model.mergedVoiceOptions.length) {
+                        return model.mergedVoiceOptions;
+                    }
+                    const defaults = Array.isArray(model?.defaults) ? model.defaults : [];
+                    const remoteVoices = Array.isArray(model?.remoteVoices) ? model.remoteVoices : [];
+                    return [...defaults, ...remoteVoices];
+                });
+                return normalizeNetworkVoiceItems(flattened);
+            }
+
+            const defaults = Array.isArray(payload?.defaults) ? payload.defaults : [];
+            const remoteVoices = Array.isArray(payload?.remoteVoices) ? payload.remoteVoices : [];
+            return normalizeNetworkVoiceItems([...defaults, ...remoteVoices]);
+        };
+
         if (!forceRefresh) {
             try {
                 const cachedModels = await fs.readFile(MODELS_CACHE_PATH, 'utf-8');
                 console.log('从缓存加载Sovits模型列表。');
-                return JSON.parse(cachedModels);
+                const parsedCache = JSON.parse(cachedModels);
+                return extractNetworkModelsFromCache(parsedCache);
             } catch (error) {
                 console.log('Sovits模型缓存不存在或读取失败，将从API获取。');
             }
         }
 
         try {
-            console.log(`正在从 ${SOVITS_API_BASE_URL}/models 获取模型列表...`);
-            const response = await axios.post(`${SOVITS_API_BASE_URL}/models`, { version: "v2ProPlus" });
+            const runtimeConfig = await this.getRuntimeConfig();
+
+            if (runtimeConfig.voiceMode === 'network') {
+                console.log(`正在从 ${runtimeConfig.baseUrl}/api/voice/list 获取网络音色列表...`);
+                const response = await axios.get(`${runtimeConfig.baseUrl}/api/voice/list`, {
+                    headers: this.buildHeaders(runtimeConfig.apiKey)
+                });
+
+                const defaults = Array.isArray(response.data?.defaults) ? response.data.defaults : [];
+                const remoteVoices = Array.isArray(response.data?.results)
+                    ? response.data.results
+                    : Array.isArray(response.data?.result)
+                        ? response.data.result
+                        : Array.isArray(response.data)
+                            ? response.data
+                            : [];
+                const mergedVoiceOptions = normalizeNetworkVoiceItems([...defaults, ...remoteVoices]);
+
+                await fs.writeFile(MODELS_CACHE_PATH, JSON.stringify({
+                    providerUrl: response.data?.providerUrl || runtimeConfig.baseUrl,
+                    modelId: response.data?.modelId || DEFAULT_NETWORK_TTS_MODEL,
+                    defaults,
+                    remoteVoices,
+                    mergedVoiceOptions,
+                    updatedAt: new Date().toISOString()
+                }, null, 2));
+                console.log('网络音色列表已获取并缓存。');
+                return mergedVoiceOptions;
+            }
+
+            console.log(`正在从 ${runtimeConfig.baseUrl}/models 获取模型列表...`);
+            const response = await axios.post(`${runtimeConfig.baseUrl}/models`, { version: "v2ProPlus" }, {
+                headers: this.buildHeaders(runtimeConfig.apiKey)
+            });
 
             if (response.data && response.data.msg === "获取成功" && response.data.models) {
                 await fs.writeFile(MODELS_CACHE_PATH, JSON.stringify(response.data.models, null, 2));
@@ -60,7 +174,7 @@ class SovitsTTS {
             console.error("请求Sovits模型列表API时出错: ", error.message);
             try {
                 const cachedModels = await fs.readFile(MODELS_CACHE_PATH, 'utf-8');
-                return JSON.parse(cachedModels);
+                return extractNetworkModelsFromCache(JSON.parse(cachedModels));
             } catch (e) {
                 return null;
             }
@@ -89,37 +203,65 @@ class SovitsTTS {
         }
 
         // 2. 如果没有缓存，请求API
-        // 根据模型名称动态确定语言
-        let promptLang = "中文";
-        if (voice.includes('日语')) {
-            promptLang = "日语";
-        }
-        // 可以在这里添加更多语言的判断，例如 '英语', '韩语' 等
-
-        const payload = {
-            model: "tts-v2ProPlus",
-            input: text,
-            voice: voice,
-            response_format: "mp3",
-            speed: speed,
-            other_params: {
-                text_lang: promptLang === "日语" ? "日语" : "中英混合", // 动态设置 text_lang
-                prompt_lang: promptLang, // 动态设置语言
-                emotion: "默认",
-                text_split_method: "按标点符号切",
-            }
-        };
-
         try {
-            console.log('[TTS] 发送API请求:', JSON.stringify(payload));
-            const response = await axios.post(`${SOVITS_API_BASE_URL}/v1/audio/speech`, payload, {
-                responseType: 'arraybuffer'
+            const runtimeConfig = await this.getRuntimeConfig();
+
+            let payload;
+            let endpoint;
+
+            if (runtimeConfig.voiceMode === 'network') {
+                payload = {
+                    model: DEFAULT_NETWORK_TTS_MODEL,
+                    input: text,
+                    voice: voice,
+                    response_format: "mp3",
+                    speed: speed
+                };
+                endpoint = '/v1/audio/speech';
+            } else {
+                let promptLang = "中文";
+                if (voice.includes('日语')) {
+                    promptLang = "日语";
+                }
+
+                payload = {
+                    model: "tts-v2ProPlus",
+                    input: text,
+                    voice: voice,
+                    response_format: "mp3",
+                    speed: speed,
+                    other_params: {
+                        text_lang: promptLang === "日语" ? "日语" : "中英混合",
+                        prompt_lang: promptLang,
+                        emotion: "默认",
+                        text_split_method: "按标点符号切",
+                    }
+                };
+                endpoint = '/v1/audio/speech';
+            }
+
+            console.log('[TTS] 发送API请求:', JSON.stringify({
+                baseUrl: runtimeConfig.baseUrl,
+                voiceMode: runtimeConfig.voiceMode,
+                payload
+            }));
+
+            const response = await axios.post(`${runtimeConfig.baseUrl}${endpoint}`, payload, {
+                responseType: 'arraybuffer',
+                headers: this.buildHeaders(runtimeConfig.apiKey),
+                validateStatus: () => true
             });
+
+            if (response.status < 200 || response.status >= 300) {
+                const errorBody = Buffer.from(response.data || []).toString('utf8');
+                console.error("[TTS] 请求语音合成API时出错:", `status=${response.status}`, errorBody);
+                return null;
+            }
+
             console.log(`[TTS]收到API响应: 状态 ${response.status}, 类型 ${response.headers['content-type']}`);
 
-            if (response.headers['content-type'] === 'audio/mpeg') {
+            if ((response.headers['content-type'] || '').includes('audio/')) {
                 const audioBuffer = Buffer.from(response.data);
-                // 3. 保存到缓存
                 try {
                     await fs.writeFile(cacheFilePath, audioBuffer);
                     console.log(`[TTS] 音频已成功缓存: ${cacheKey}`);
@@ -128,7 +270,8 @@ class SovitsTTS {
                 }
                 return audioBuffer;
             } else {
-                console.error("[TTS] API没有返回正确的音频文件类型。");
+                const nonAudioBody = Buffer.from(response.data || []).toString('utf8');
+                console.error("[TTS] API没有返回正确的音频文件类型。", nonAudioBody);
                 return null;
             }
         } catch (error) {

@@ -2,6 +2,8 @@
 const { ipcMain, dialog, shell, clipboard, net, nativeImage, BrowserWindow, Menu, app } = require('electron');
 const fs = require('fs-extra');
 const path = require('path');
+const fileManager = require('../fileManager');
+const { PRELOAD_ROLES, resolveAppPreload } = require('../services/preloadPaths');
 // sharp is now lazy-loaded
 
 /**
@@ -13,8 +15,14 @@ const path = require('path');
  * @param {function} context.startSelectionListener - Function to start the selection listener.
  * @param {Array<BrowserWindow>} context.openChildWindows - Array of open child windows.
  */
+let ipcHandlersRegistered = false;
+
 function initialize(mainWindow, context) {
     let { openChildWindows } = context;
+
+    if (ipcHandlersRegistered) {
+        return;
+    }
 
     ipcMain.handle('select-avatar', async () => {
         const listenerWasActive = context.getSelectionListenerStatus();
@@ -77,6 +85,15 @@ function initialize(mainWindow, context) {
         } catch (error) {
             console.error('[Main Process] Error reading text from clipboard:', error);
             return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('get-text-content', async (event, filePath, fileType) => {
+        try {
+            return await fileManager.getTextContent(filePath, fileType);
+        } catch (error) {
+            console.error(`[Main Process] Error reading text content for ${filePath}:`, error);
+            throw error;
         }
     });
 
@@ -287,7 +304,7 @@ function initialize(mainWindow, context) {
             backgroundColor: '#28282c', // Default to dark, will be updated by JS
             icon: path.join(__dirname, '..', 'assets', 'icon.png'),
             webPreferences: {
-                preload: path.join(app.getAppPath(), 'preload.js'),
+                preload: resolveAppPreload(app.getAppPath(), PRELOAD_ROLES.UTILITY),
                 contextIsolation: true, nodeIntegration: false, devTools: true
             }
         });
@@ -316,7 +333,7 @@ function initialize(mainWindow, context) {
             minimizable: true, // 确保窗口可以最小化到任务栏
             icon: path.join(__dirname, '..', 'assets', 'icon.png'),
             webPreferences: {
-                preload: path.join(__dirname, '..', '..', 'preload.js'),
+                preload: resolveAppPreload(app.getAppPath(), PRELOAD_ROLES.UTILITY),
                 contextIsolation: true, nodeIntegration: false, devTools: true
             }
         });
@@ -337,6 +354,8 @@ function initialize(mainWindow, context) {
             if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus();
         });
     });
+
+    ipcHandlersRegistered = true;
 }
 
 module.exports = {

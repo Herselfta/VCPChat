@@ -15,6 +15,7 @@
 'use strict';
 
 (function () {
+    const desktopApi = window.desktopAPI || window.electronAPI;
     const { state } = window.VCPDesktop;
 
     // ============================================================
@@ -130,12 +131,10 @@
         </svg>`,
         // 独立 Electron App 图标
         toolbox: `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="4" y="18" width="40" height="26" rx="4" fill="currentColor" opacity="0.1"/>
-            <rect x="4" y="18" width="40" height="26" rx="4" stroke="currentColor" stroke-width="2.5" fill="none"/>
-            <path d="M16 18V12a4 4 0 014-4h8a4 4 0 014 4v6" stroke="currentColor" stroke-width="2.5" fill="none"/>
-            <line x1="4" y1="28" x2="44" y2="28" stroke="currentColor" stroke-width="2" opacity="0.3"/>
-            <rect x="20" y="24" width="8" height="8" rx="2" fill="currentColor" opacity="0.3"/>
-            <circle cx="24" cy="28" r="2" fill="currentColor"/>
+            <circle cx="24" cy="24" r="18" fill="currentColor" opacity="0.08"/>
+            <circle cx="24" cy="24" r="18" stroke="currentColor" stroke-width="2.5" fill="none"/>
+            <path d="M35 13c-2.8-2.8-7.2-2.8-10 0l2 2a2 2 0 010 2.8l-1.5 1.5M13 35c2.8 2.8 7.2 2.8 10 0l-2-2a2 2 0 010-2.8l1.5-1.5" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+            <path d="M28.5 19.5L19.5 28.5" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
         </svg>`,
         database: `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
             <ellipse cx="24" cy="12" rx="16" ry="6" fill="currentColor" opacity="0.12"/>
@@ -220,8 +219,8 @@
         {
             id: 'vchat-app-notes',
             name: '用户笔记中心',
-            icon: null,
-            animatedIcon: `${ICON_BASE}/人类笔记.gif`,
+            icon: `${ICON_BASE}/人类笔记.png`,
+            animatedIcon: null,
             svgIcon: SVG_ICONS.notes,
             emoji: '📝',
             description: '打开用户笔记管理窗口',
@@ -230,8 +229,8 @@
         {
             id: 'vchat-app-memo',
             name: 'AI记忆中心',
-            icon: null,
-            animatedIcon: `${ICON_BASE}/AI记忆.gif`,
+            icon: `${ICON_BASE}/AI记忆.png`,
+            animatedIcon: null,
             svgIcon: SVG_ICONS.memo,
             emoji: '🧠',
             description: '打开 AI 记忆图谱 & 备忘录',
@@ -240,8 +239,8 @@
         {
             id: 'vchat-app-forum',
             name: '论坛模块',
-            icon: null,
-            animatedIcon: `${ICON_BASE}/论坛.gif`,
+            icon: `${ICON_BASE}/论坛.png`,
+            animatedIcon: null,
             svgIcon: SVG_ICONS.forum,
             emoji: '🏛️',
             description: '打开 VCP 论坛讨论区',
@@ -250,8 +249,8 @@
         {
             id: 'vchat-app-rag-observer',
             name: 'RAG监听',
-            icon: null,
-            animatedIcon: `${ICON_BASE}/信息流.gif`,
+            icon: `${ICON_BASE}/信息流.png`,
+            animatedIcon: null,
             svgIcon: SVG_ICONS.rag,
             emoji: '📡',
             description: '打开 VCP RAG 信息流监听器',
@@ -300,8 +299,8 @@
         {
             id: 'vchat-app-themes',
             name: '主题商店',
-            icon: null,
-            animatedIcon: `${ICON_BASE}/主题.gif`,
+            icon: `${ICON_BASE}/主题.png`,
+            animatedIcon: null,
             svgIcon: SVG_ICONS.themes,
             emoji: '🎭',
             description: '打开主题定制与管理',
@@ -309,9 +308,9 @@
         },
         {
             id: 'vchat-app-toolbox',
-            name: '人类工具箱',
-            icon: null,
-            animatedIcon: `${ICON_BASE}/工具箱.gif`,
+            name: '工具',
+            icon: `${ICON_BASE}/工具箱.png`,
+            animatedIcon: null,
             svgIcon: SVG_ICONS.toolbox,
             emoji: '🧰',
             description: '高级插件管理和调度器（独立应用）',
@@ -320,8 +319,8 @@
         {
             id: 'vchat-app-dbmanager',
             name: 'Vchat数据',
-            icon: null,
-            animatedIcon: `${ICON_BASE}/数据库.gif`,
+            icon: `${ICON_BASE}/数据库.png`,
+            animatedIcon: null,
             svgIcon: SVG_ICONS.database,
             emoji: '🗄️',
             description: '数据库高级管理器（独立应用）',
@@ -409,8 +408,8 @@
         }
 
         try {
-            if (window.electronAPI?.desktopLaunchVchatApp) {
-                const result = await window.electronAPI.desktopLaunchVchatApp(appDef.appAction);
+            if (desktopApi?.desktopLaunchVchatApp) {
+                const result = await desktopApi.desktopLaunchVchatApp(appDef.appAction);
                 if (result?.success) {
                     console.log(`[VChatApps] Successfully launched: ${appDef.name}`);
                     if (window.VCPDesktop.status) {
@@ -466,7 +465,8 @@
                 if (existing.description !== appDef.description) { existing.description = appDef.description; changed = true; }
                 if (existing.appAction !== appDef.appAction) { existing.appAction = appDef.appAction; changed = true; }
                 // 图标仅在用户未自定义时同步（如果是 data: URL 则说明用户自定义了）
-                if (existing.icon && !existing.icon.startsWith('data:') && existing.icon !== appDef.icon) {
+                const hasCustomIcon = typeof existing.icon === 'string' && existing.icon.startsWith('data:');
+                if (!hasCustomIcon && existing.icon !== appDef.icon) {
                     existing.icon = appDef.icon;
                     changed = true;
                 }

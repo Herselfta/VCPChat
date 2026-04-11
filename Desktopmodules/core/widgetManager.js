@@ -7,6 +7,8 @@
 
 (function () {
     const { state, CONSTANTS, domRefs, drag, zIndex } = window.VCPDesktop;
+    const removingWidgetIds = new Set();
+    const REMOVE_FALLBACK_MS = 450;
 
     // ============================================================
     // 挂件创建
@@ -19,6 +21,11 @@
      * @returns {object} widgetData
      */
     function createWidget(widgetId, options = {}) {
+        if (removingWidgetIds.has(widgetId)) {
+            console.warn(`[Desktop] Widget ${widgetId} is being removed, skipping recreation.`);
+            return null;
+        }
+
         if (state.widgets.has(widgetId)) {
             console.log(`[Desktop] Widget ${widgetId} already exists, reusing.`);
             return state.widgets.get(widgetId);
@@ -145,6 +152,11 @@
      * @param {string} fullContent - HTML 内容
      */
     function appendWidgetContent(widgetId, fullContent) {
+        if (removingWidgetIds.has(widgetId)) {
+            console.warn(`[Desktop] Widget ${widgetId} is being removed, skipping content append.`);
+            return;
+        }
+
         let widgetData = state.widgets.get(widgetId);
         if (!widgetData) {
             // 并发情况下，如果 createWidget 还没来得及把 widget 放入 state.widgets，
@@ -154,6 +166,7 @@
                 x: 100 + Math.random() * 200,
                 y: 100 + Math.random() * 200,
             });
+            if (!widgetData) return;
         }
 
         // 如果内容没有变化，跳过重复渲染，减少并发时的 DOM 压力
@@ -198,6 +211,8 @@
      * @param {string} widgetId
      */
     function finalizeWidget(widgetId) {
+        if (removingWidgetIds.has(widgetId)) return;
+
         const widgetData = state.widgets.get(widgetId);
         if (!widgetData) return;
 
@@ -218,8 +233,12 @@
      * @param {string} widgetId
      */
     function removeWidget(widgetId) {
+        if (removingWidgetIds.has(widgetId)) return;
+
         const widgetData = state.widgets.get(widgetId);
         if (!widgetData) return;
+        removingWidgetIds.add(widgetId);
+        widgetData.isRemoving = true;
 
         // 断开内容观察器，防止内存泄漏
         if (widgetData._resizeObserver) {
@@ -241,19 +260,44 @@
             widgetData._windowListeners = [];
         }
 
-        widgetData.element.classList.add('removing');
-        widgetData.element.addEventListener('animationend', () => {
-            widgetData.element.remove();
-            state.widgets.delete(widgetId);
-            console.log(`[Desktop] Widget removed: ${widgetId}`);
-        }, { once: true });
+        state.widgets.delete(widgetId);
+
+        let finalized = false;
+        let fallbackTimerId = null;
+        const widgetElement = widgetData.element;
+
+        const finalizeRemove = (reason) => {
+            if (finalized) return;
+            finalized = true;
+
+            if (fallbackTimerId) {
+                clearTimeout(fallbackTimerId);
+                fallbackTimerId = null;
+            }
+
+            widgetElement.removeEventListener('animationend', onAnimationEnd);
+            widgetElement.remove();
+            removingWidgetIds.delete(widgetId);
+            console.log(`[Desktop] Widget removed: ${widgetId} (${reason})`);
+        };
+
+        const onAnimationEnd = (event) => {
+            if (event.target !== widgetElement) return;
+            if (event.animationName && event.animationName !== 'desktop-widget-remove') return;
+            finalizeRemove('animationend');
+        };
+
+        widgetElement.classList.remove('entering');
+        widgetElement.classList.add('removing');
+        widgetElement.addEventListener('animationend', onAnimationEnd);
+        fallbackTimerId = setTimeout(() => finalizeRemove('timeout'), REMOVE_FALLBACK_MS);
     }
 
     /**
      * 清除所有挂件
      */
     function clearAllWidgets() {
-        state.widgets.forEach((_, id) => removeWidget(id));
+        Array.from(state.widgets.keys()).forEach((id) => removeWidget(id));
     }
 
     // ============================================================
@@ -267,6 +311,23 @@
     function autoResizeWidget(widgetData) {
         // 如果挂件标记了固定尺寸，跳过自动调整
         if (widgetData.fixedSize) return;
+
+        const widgetId = widgetData.element?.dataset?.widgetId;
+        const currentWidth = parseInt(widgetData.element.style.width) || CONSTANTS.AUTO_RESIZE_MIN_W;
+
+        // --- Pretext 优化：如果内容是纯文本或简单 Markdown，尝试预计算高度 ---
+        if (window.pretextBridge && window.pretextBridge.isReady() && widgetData.contentBuffer && widgetId) {
+            // 简单剥离 HTML 标签获取文本内容进行快速估算
+            const plainText = widgetData.contentBuffer.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+            if (plainText.length > 0) {
+                const estimatedHeight = window.pretextBridge.estimateHeight(widgetId, plainText, 'widget', currentWidth);
+                // 如果估算高度与当前高度差异极小，可以考虑跳过后续的 DOM 测量以节省性能
+                const currentHeight = parseInt(widgetData.element.style.height) || 0;
+                if (Math.abs(estimatedHeight - currentHeight) < 2 && !widgetData.isConstructing) {
+                    return; // 高度几乎没变且不是初次构造，跳过昂贵的 DOM 测量
+                }
+            }
+        }
 
         requestAnimationFrame(() => {
             const container = widgetData.contentContainer;
@@ -381,8 +442,21 @@
                         _widgetData = _realWindow.VCPDesktop.state.widgets.get('${widgetId}');
                     }
 
+                    var _perf = _realWindow.VCPDesktop ? _realWindow.VCPDesktop.performanceManager : null;
+                    var _wrap = function(fn) {
+                        return function() {
+                            if (!_perf || !_perf.active) return fn.apply(this, arguments);
+                            var token = _perf.taskStart(widgetId);
+                            try {
+                                return fn.apply(this, arguments);
+                            } finally {
+                                _perf.taskEnd(token);
+                            }
+                        };
+                    };
+
                     var setInterval = function(fn, delay) {
-                        var id = _realWindow.setInterval(fn, delay);
+                        var id = _realWindow.setInterval(_wrap(fn), delay);
                         if (_widgetData) _widgetData._intervals.push(id);
                         return id;
                     };
@@ -395,7 +469,7 @@
                     };
 
                     var setTimeout = function(fn, delay) {
-                        var id = _realWindow.setTimeout(fn, delay);
+                        var id = _realWindow.setTimeout(_wrap(fn), delay);
                         if (_widgetData) _widgetData._timeouts.push(id);
                         return id;
                     };
@@ -411,16 +485,20 @@
                         get: function(target, prop) {
                             if (prop === 'addEventListener') {
                                 return function(type, listener, options) {
-                                    if (_widgetData) _widgetData._windowListeners.push({type, listener, options});
-                                    return _realWindow.addEventListener(type, listener, options);
+                                    var wrapped = _wrap(listener);
+                                    if (_widgetData) _widgetData._windowListeners.push({type, listener: wrapped, options, original: listener});
+                                    return _realWindow.addEventListener(type, wrapped, options);
                                 };
                             }
                             if (prop === 'removeEventListener') {
                                 return function(type, listener, options) {
                                     if (_widgetData) {
-                                        _widgetData._windowListeners = _widgetData._windowListeners.filter(
-                                            l => l.type !== type || l.listener !== listener
-                                        );
+                                        var found = _widgetData._windowListeners.find(l => l.type === type && (l.listener === listener || l.original === listener));
+                                        if (found) {
+                                            _realWindow.removeEventListener(type, found.listener, options);
+                                            _widgetData._windowListeners = _widgetData._windowListeners.filter(l => l !== found);
+                                            return;
+                                        }
                                     }
                                     return _realWindow.removeEventListener(type, listener, options);
                                 };
@@ -429,6 +507,15 @@
                             if (prop === 'clearInterval') return clearInterval;
                             if (prop === 'setTimeout') return setTimeout;
                             if (prop === 'clearTimeout') return clearTimeout;
+                            
+                            if (prop === 'requestAnimationFrame') {
+                                return function(callback) {
+                                    return _realWindow.requestAnimationFrame(function(timestamp) {
+                                        if (_perf && _perf.active) _perf.recordFrame(widgetId);
+                                        _wrap(callback)(timestamp);
+                                    });
+                                };
+                            }
                             
                             var val = target[prop];
                             return typeof val === 'function' ? val.bind(target) : val;
@@ -445,8 +532,23 @@
                         createRange: _realDoc.createRange.bind(_realDoc),
                         createComment: _realDoc.createComment.bind(_realDoc),
                         createDocumentFragment: _realDoc.createDocumentFragment.bind(_realDoc),
-                        addEventListener: function(type, fn, opts) { root.addEventListener(type, fn, opts); },
-                        removeEventListener: function(type, fn, opts) { root.removeEventListener(type, fn, opts); },
+                        addEventListener: function(type, fn, opts) {
+                            var wrapped = _wrap(fn);
+                            if (_widgetData) _widgetData._docListeners = _widgetData._docListeners || [];
+                            if (_widgetData) _widgetData._docListeners.push({type, listener: wrapped, options: opts, original: fn});
+                            root.addEventListener(type, wrapped, opts);
+                        },
+                        removeEventListener: function(type, fn, opts) {
+                            if (_widgetData && _widgetData._docListeners) {
+                                var found = _widgetData._docListeners.find(l => l.type === type && (l.listener === fn || l.original === fn));
+                                if (found) {
+                                    root.removeEventListener(type, found.listener, opts);
+                                    _widgetData._docListeners = _widgetData._docListeners.filter(l => l !== found);
+                                    return;
+                                }
+                            }
+                            root.removeEventListener(type, fn, opts);
+                        },
                         body: root,
                         head: _realDoc.head,
                         documentElement: root,
@@ -469,12 +571,12 @@
                                 }
                             } catch(e) {}
                             if (!_savedId) return Promise.reject('Widget not saved yet. Save it first via favorites.');
-                            return window.electronAPI ? window.electronAPI.desktopSaveWidgetFile({
+                            return _musicBridge ? _musicBridge.desktopSaveWidgetFile({
                                 widgetId: _savedId,
                                 fileName: fileName,
                                 content: content,
                                 encoding: encoding || 'utf-8'
-                            }) : Promise.reject('electronAPI not available');
+                            }) : Promise.reject('desktop bridge not available');
                         },
                         loadFile: function(fileName) {
                             var _savedId = null;
@@ -483,10 +585,10 @@
                                 if (_wd) _savedId = _wd.savedId;
                             } catch(e) {}
                             if (!_savedId) return Promise.reject('Widget not saved yet.');
-                            return window.electronAPI ? window.electronAPI.desktopLoadWidgetFile({
+                            return _musicBridge ? _musicBridge.desktopLoadWidgetFile({
                                 widgetId: _savedId,
                                 fileName: fileName
-                            }) : Promise.reject('electronAPI not available');
+                            }) : Promise.reject('desktop bridge not available');
                         },
                         listFiles: function() {
                             var _savedId = null;
@@ -495,23 +597,27 @@
                                 if (_wd) _savedId = _wd.savedId;
                             } catch(e) {}
                             if (!_savedId) return Promise.reject('Widget not saved yet.');
-                            return window.electronAPI ? window.electronAPI.desktopListWidgetFiles(_savedId) : Promise.reject('electronAPI not available');
+                            return _musicBridge ? _musicBridge.desktopListWidgetFiles(_savedId) : Promise.reject('desktop bridge not available');
                         },
                     };
                     
-                    var _electron = window.electron;
+                    var _musicBridge = window.desktopAPI || window.electronAPI;
                     var musicAPI = {
-                        play: function() { return _electron ? _electron.invoke('music-play') : Promise.reject('electron not available'); },
-                        pause: function() { return _electron ? _electron.invoke('music-pause') : Promise.reject('electron not available'); },
+                        play: function() { return _musicBridge && _musicBridge.musicPlay ? _musicBridge.musicPlay() : Promise.reject('music bridge not available'); },
+                        pause: function() { return _musicBridge && _musicBridge.musicPause ? _musicBridge.musicPause() : Promise.reject('music bridge not available'); },
                         getState: function() {
-                            if (!_electron) return Promise.reject('electron not available');
-                            return _electron.invoke('music-get-state').then(function(r) {
+                            if (!_musicBridge || !_musicBridge.getMusicState) return Promise.reject('music bridge not available');
+                            return _musicBridge.getMusicState().then(function(r) {
                                 return (r && r.state) ? r.state : r;
                             });
                         },
-                        setVolume: function(v) { return _electron ? _electron.invoke('music-set-volume', v) : Promise.reject('electron not available'); },
-                        seek: function(pos) { return _electron ? _electron.invoke('music-seek', pos) : Promise.reject('electron not available'); },
-                        send: function(channel, data) { if (_electron) _electron.send(channel, data); },
+                        setVolume: function(v) { return _musicBridge && _musicBridge.setMusicVolume ? _musicBridge.setMusicVolume(v) : Promise.reject('music bridge not available'); },
+                        seek: function(pos) { return _musicBridge && _musicBridge.seekMusic ? _musicBridge.seekMusic(pos) : Promise.reject('music bridge not available'); },
+                        send: function(channel, data) {
+                            if (channel === 'music-remote-command' && _musicBridge && _musicBridge.sendMusicRemoteCommand) {
+                                _musicBridge.sendMusicRemoteCommand(data);
+                            }
+                        },
                     };
                     
                     ${userCode}

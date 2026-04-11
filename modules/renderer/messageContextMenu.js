@@ -301,17 +301,10 @@ function showContextMenu(event, messageItem, message) {
                     
                     if (agentConfig && agentConfig.ttsVoicePrimary) {
                         const contentDiv = messageItem.querySelector('.md-content');
-                        let textToRead = '';
-                        if (contentDiv) {
-                            // Clone the content element to avoid modifying the actual displayed content
-                            const contentClone = contentDiv.cloneNode(true);
-                            // Remove all tool-use bubbles, tool-result bubbles, style tags, and script tags from the clone
-                            contentClone.querySelectorAll('.vcp-tool-use-bubble, .vcp-tool-result-bubble, style, script').forEach(el => el.remove());
-                            // Now, get the innerText from the cleaned-up clone
-                            // 修复：清理多余的空行，确保最多只有一个空行
-                            textToRead = (contentClone.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
-                        }
-                        
+                        const textToRead = contextMenuDependencies.extractSpeakableTextFromContentElement
+                            ? contextMenuDependencies.extractSpeakableTextFromContentElement(contentDiv)
+                            : '';
+
                         if (textToRead.trim()) {
                             // Pass bilingual TTS settings
                             electronAPI.sovitsSpeak({
@@ -719,8 +712,11 @@ async function handleRegenerateResponse(originalAssistantMessage) {
         avatarUrl: currentSelectedItemVal.avatarUrl,
         avatarColor: currentSelectedItemVal.config?.avatarCalculatedColor,
     };
-    
+
     contextMenuDependencies.renderMessage(regenerationThinkingMessage, false);
+    currentChatHistoryArray.push(regenerationThinkingMessage);
+    mainRefs.currentChatHistoryRef.set([...currentChatHistoryArray]);
+    window.updateSendButtonState?.();
 
     try {
         const agentConfig = await electronAPI.getAgentConfig(currentSelectedItemVal.id);
@@ -769,7 +765,11 @@ async function handleRegenerateResponse(originalAssistantMessage) {
                 let historicalAppendedText = "";
                 for (const att of msg.attachments) {
                     const fileManagerData = att._fileManagerData || {};
-                    const filePathForContext = att.src || (fileManagerData.internalPath ? fileManagerData.internalPath.replace('file://', '') : (att.name || '未知文件'));
+                    // 🟢 同步：重新生成时的多级路径探测。优先使用 internalPath (物理路径)
+                    const filePathForContext = (fileManagerData && fileManagerData.internalPath) || 
+                                               att.localPath || 
+                                               att.src || 
+                                               (att.name || '未知文件');
 
                     if (fileManagerData.imageFrames && fileManagerData.imageFrames.length > 0) {
                          historicalAppendedText += `\n\n[附加文件: ${filePathForContext} (扫描版PDF，已转换为图片)]`;

@@ -4,9 +4,9 @@
 
 class ModularPromptModule {
     constructor(options) {
-        this.agentId = options.agentId;
-        this.config = options.config;
         this.electronAPI = options.electronAPI;
+        this.agentId = null;
+        this.config = null;
         
         // 积木块数据
         this.blocks = [];
@@ -29,9 +29,17 @@ class ModularPromptModule {
         this.dropIndicator = null;
         this.draggedHiddenBlock = null; // 从小仓拖拽的积木块
         this.draggedWarehouse = null; // 拖拽的仓库
-        
-        // 加载保存的数据
-        this.loadData();
+    }
+
+    /**
+     * 更新上下文并加载数据
+     * @param {string} agentId 
+     * @param {Object} config 
+     */
+    async updateContext(agentId, config) {
+        this.agentId = agentId;
+        this.config = config;
+        await this.loadData();
     }
 
       /**
@@ -90,7 +98,7 @@ class ModularPromptModule {
     render(container) {
         this.container = container;
         container.innerHTML = '';
-        container.className = 'modular-prompt-container';
+        container.classList.add('modular-prompt-container');
 
         // 顶部工具栏
         const toolbar = this.createToolbar();
@@ -223,7 +231,7 @@ class ModularPromptModule {
 
         if (block.type === 'newline') {
             blockEl.classList.add('newline-block');
-            blockEl.innerHTML = '<span class="newline-label">\\n</span>';
+            blockEl.innerHTML = '<span class="newline-label">换行</span>';
         } else {
             blockEl.classList.add('text-block');
             if (block.disabled) {
@@ -656,7 +664,7 @@ class ModularPromptModule {
         // 添加新建仓库按钮
         const addWarehouseBtn = document.createElement('button');
         addWarehouseBtn.className = 'add-warehouse-btn';
-        addWarehouseBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+        addWarehouseBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>新建小仓</span>';
         addWarehouseBtn.title = '新建仓库';
         addWarehouseBtn.onclick = () => this.createWarehouse();
         header.appendChild(addWarehouseBtn);
@@ -1187,7 +1195,7 @@ class ModularPromptModule {
 
         const previewText = document.createElement('pre');
         previewText.className = 'preview-text';
-        previewText.textContent = this.formatBlocks();
+        previewText.textContent = this.getFormattedPrompt();
         previewContainer.appendChild(previewText);
 
         this.blocksContainer.appendChild(previewContainer);
@@ -1216,10 +1224,51 @@ class ModularPromptModule {
     }
 
     /**
-     * 获取格式化后的提示词
+     * 获取格式化后的提示词内容
+     * 兼容 PromptManager 中对 `getFormattedPrompt` 的调用
+     * @returns {string}
      */
-    async getFormattedPrompt() {
+    getFormattedPrompt() {
         return this.formatBlocks();
+    }
+
+    /**
+     * 获取提示词内容
+     */
+    async getPrompt() {
+        return this.getFormattedPrompt();
+    }
+
+    /**
+     * 销毁模块，释放资源
+     */
+    destroy() {
+        // 1. 移除可能存在的全局右键菜单
+        const existingMenu = document.querySelector('.block-context-menu');
+        if (existingMenu) {
+            existingMenu.remove();
+        }
+
+        // 2. 清理 DOM 引用
+        this.container = null;
+        this.blocksContainer = null;
+        this.warehouseContainer = null;
+        this.dropIndicator = null;
+
+        // 3. 清理状态和数据引用
+        this.blocks = [];
+        this.hiddenBlocks = {};
+        this.draggedBlock = null;
+        this.draggedHiddenBlock = null;
+        this.draggedWarehouse = null;
+
+        // 4. 清理定时器（如果有）
+        if (this.pushTimer) {
+            clearInterval(this.pushTimer);
+            this.pushTimer = null;
+        }
+
+        console.debug(`[ModularPromptModule] Destroyed for agent: ${this.agentId}`);
     }
 
     /**

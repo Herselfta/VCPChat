@@ -8,6 +8,167 @@
     let croppedGroupAvatarFile = null;
 
     const uiHelperFunctions = {};
+    const filePreviewIconMarkup = `
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+</svg>`;
+    const audioFilePreviewIconMarkup = `
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M4 6.835V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-.343"></path>
+    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+    <path d="M2 19a2 2 0 0 1 4 0v1a2 2 0 0 1-4 0v-4a6 6 0 0 1 12 0v4a2 2 0 0 1-4 0v-1a2 2 0 0 1 4 0"></path>
+</svg>`;
+    const videoFilePreviewIconMarkup = `
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+    <path d="M7 3v18"></path>
+    <path d="M3 7.5h4"></path>
+    <path d="M3 12h18"></path>
+    <path d="M3 16.5h4"></path>
+    <path d="M17 3v18"></path>
+    <path d="M17 7.5h4"></path>
+    <path d="M17 16.5h4"></path>
+</svg>`;
+    const textFilePreviewIconMarkup = `
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+    <path d="M10 9H8"></path>
+    <path d="M16 13H8"></path>
+    <path d="M16 17H8"></path>
+</svg>`;
+    const pdfFilePreviewIconMarkup = `
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+    <path d="M8 17v-4h2a1.5 1.5 0 0 1 0 3H8"></path>
+    <path d="M13 17v-4h1.5a2 2 0 0 1 0 4H13"></path>
+    <path d="M18 13h-2v4"></path>
+</svg>`;
+    const documentFilePreviewIconMarkup = `
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+    <path d="M8 11h8"></path>
+    <path d="M8 15h8"></path>
+    <path d="M8 19h5"></path>
+</svg>`;
+    const spreadsheetFilePreviewIconMarkup = `
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+    <rect x="8" y="11" width="8" height="8" rx="1"></rect>
+    <path d="M12 11v8"></path>
+    <path d="M8 15h8"></path>
+</svg>`;
+    const presentationFilePreviewIconMarkup = `
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+    <rect x="8" y="11" width="8" height="5" rx="1"></rect>
+    <path d="M12 16v3"></path>
+    <path d="M10 19h4"></path>
+</svg>`;
+    const archiveFilePreviewIconMarkup = `
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+    <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+    <path d="M12 10v2"></path>
+    <path d="M12 14v2"></path>
+    <path d="M12 18v1"></path>
+    <rect x="10" y="9" width="4" height="2" rx="0.5"></rect>
+    <rect x="10" y="13" width="4" height="2" rx="0.5"></rect>
+    <path d="M10 17h4"></path>
+</svg>`;
+    const TEXT_FILE_EXTENSIONS = new Set([
+        'txt', 'md', 'markdown', 'rtf', 'odt', 'csv', 'log', 'json', 'xml', 'yml', 'yaml',
+        'html', 'css', 'js', 'ts', 'py', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'go', 'php',
+        'sh', 'bat', 'ps1', 'sql', 'vue', 'tsx', 'jsx'
+    ]);
+    const DOCUMENT_FILE_EXTENSIONS = new Set(['doc', 'docx']);
+    const SPREADSHEET_FILE_EXTENSIONS = new Set(['xls', 'xlsx', 'ods']);
+    const PRESENTATION_FILE_EXTENSIONS = new Set(['ppt', 'pptx', 'odp']);
+    const ARCHIVE_FILE_EXTENSIONS = new Set(['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz']);
+    const TEXT_MIME_TYPES = new Set([
+        'application/json',
+        'application/xml',
+        'application/javascript',
+        'application/x-javascript',
+        'application/sql',
+        'application/x-sh',
+        'application/x-httpd-php',
+        'text/markdown',
+        'text/x-python',
+        'text/x-java-source',
+        'text/x-c',
+        'text/x-c++src',
+        'text/x-typescript'
+    ]);
+    const DOCUMENT_MIME_TYPES = new Set([
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ]);
+    const SPREADSHEET_MIME_TYPES = new Set([
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.oasis.opendocument.spreadsheet'
+    ]);
+    const PRESENTATION_MIME_TYPES = new Set([
+        'application/vnd.ms-powerpoint',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/vnd.oasis.opendocument.presentation'
+    ]);
+    const ARCHIVE_MIME_TYPES = new Set([
+        'application/zip',
+        'application/x-zip-compressed',
+        'application/x-rar-compressed',
+        'application/x-7z-compressed',
+        'application/gzip',
+        'application/x-tar',
+        'application/x-bzip2',
+        'application/x-xz',
+        'application/vnd.rar'
+    ]);
+
+    function getFileExtension(fileName) {
+        if (!fileName || typeof fileName !== 'string') return '';
+        const trimmedName = fileName.trim().toLowerCase();
+        const lastDotIndex = trimmedName.lastIndexOf('.');
+        if (lastDotIndex === -1 || lastDotIndex === trimmedName.length - 1) return '';
+        return trimmedName.substring(lastDotIndex + 1);
+    }
+
+    uiHelperFunctions.resolveAttachmentFileVisual = function(fileName = '', fileType = '') {
+        const normalizedType = typeof fileType === 'string' ? fileType.toLowerCase() : '';
+        const extension = getFileExtension(fileName);
+
+        if (normalizedType.startsWith('audio/')) {
+            return { kind: 'audio', iconMarkup: audioFilePreviewIconMarkup };
+        }
+        if (normalizedType.startsWith('video/')) {
+            return { kind: 'video', iconMarkup: videoFilePreviewIconMarkup };
+        }
+        if (normalizedType.includes('pdf') || extension === 'pdf') {
+            return { kind: 'pdf', iconMarkup: pdfFilePreviewIconMarkup };
+        }
+        if (DOCUMENT_MIME_TYPES.has(normalizedType) || DOCUMENT_FILE_EXTENSIONS.has(extension)) {
+            return { kind: 'document', iconMarkup: documentFilePreviewIconMarkup };
+        }
+        if (SPREADSHEET_MIME_TYPES.has(normalizedType) || SPREADSHEET_FILE_EXTENSIONS.has(extension)) {
+            return { kind: 'spreadsheet', iconMarkup: spreadsheetFilePreviewIconMarkup };
+        }
+        if (PRESENTATION_MIME_TYPES.has(normalizedType) || PRESENTATION_FILE_EXTENSIONS.has(extension)) {
+            return { kind: 'presentation', iconMarkup: presentationFilePreviewIconMarkup };
+        }
+        if (ARCHIVE_MIME_TYPES.has(normalizedType) || ARCHIVE_FILE_EXTENSIONS.has(extension)) {
+            return { kind: 'archive', iconMarkup: archiveFilePreviewIconMarkup };
+        }
+        if (normalizedType.startsWith('text/') || TEXT_MIME_TYPES.has(normalizedType) || normalizedType === 'application/rtf' || normalizedType === 'application/vnd.oasis.opendocument.text' || TEXT_FILE_EXTENSIONS.has(extension)) {
+            return { kind: 'text', iconMarkup: textFilePreviewIconMarkup };
+        }
+        return { kind: 'file', iconMarkup: filePreviewIconMarkup };
+    };
 
     /**
      * 从字符串中解析正则表达式（支持 /pattern/flags 格式）
@@ -409,6 +570,8 @@
             prevDiv.title = af.originalName || af.file.name;
     
             const fileType = af.file.type;
+            const fileName = af.originalName || af.file.name || '';
+            const fileVisual = uiHelperFunctions.resolveAttachmentFileVisual(fileName, fileType);
     
             if (fileType.startsWith('image/')) {
                 const thumbnailImg = document.createElement('img');
@@ -419,22 +582,14 @@
                     thumbnailImg.remove(); // Remove broken image
                     const iconSpanFallback = document.createElement('span');
                     iconSpanFallback.className = 'file-preview-icon';
-                    iconSpanFallback.textContent = '⚠️'; // Error/fallback icon
+                    iconSpanFallback.innerHTML = filePreviewIconMarkup;
                     prevDiv.prepend(iconSpanFallback); // Add fallback icon at the beginning
                 };
                 prevDiv.appendChild(thumbnailImg);
             } else {
                 const iconSpan = document.createElement('span');
                 iconSpan.className = 'file-preview-icon';
-                if (fileType.startsWith('audio/')) {
-                    iconSpan.textContent = '🎵';
-                } else if (fileType.startsWith('video/')) {
-                    iconSpan.textContent = '🎞️';
-                } else if (fileType.includes('pdf')) {
-                    iconSpan.textContent = '📄';
-                } else {
-                    iconSpan.textContent = '📎';
-                }
+                iconSpan.innerHTML = fileVisual.iconMarkup;
                 prevDiv.appendChild(iconSpan);
             }
     
@@ -549,12 +704,33 @@
          const createNewAgentBtn = document.getElementById('createNewAgentBtn');
          const createNewGroupBtn = document.getElementById('createNewGroupBtn');
          if (createNewAgentBtn) {
-             createNewAgentBtn.textContent = '创建 Agent';
+             createNewAgentBtn.innerHTML = `
+                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                     <path d="M2 21a8 8 0 0 1 13.292-6"></path>
+                     <circle cx="10" cy="8" r="5"></circle>
+                     <path d="M19 16v6"></path>
+                     <path d="M22 19h-6"></path>
+                 </svg>
+                 <span class="sidebar-button-label">
+                     <span class="sidebar-button-prefix">&#21019;&#24314;</span>
+                     <span class="sidebar-button-keyword">Agent</span>
+                 </span>
+             `;
          }
          if (createNewGroupBtn) {
-             createNewGroupBtn.textContent = '创建 Group';
-             console.log('[UI Helper prepareGroupSettingsDOM] createNewGroupBtn textContent set to:', createNewGroupBtn.textContent);
-             createNewGroupBtn.style.display = 'inline-block'; // Make it visible
+             createNewGroupBtn.innerHTML = `
+                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                     <path d="M18 21a8 8 0 0 0-16 0"></path>
+                     <circle cx="10" cy="8" r="5"></circle>
+                     <path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"></path>
+                 </svg>
+                 <span class="sidebar-button-label">
+                     <span class="sidebar-button-prefix">&#21019;&#24314;</span>
+                     <span class="sidebar-button-keyword">Group</span>
+                 </span>
+             `;
+             console.log('[UI Helper prepareGroupSettingsDOM] createNewGroupBtn icon content applied');
+             createNewGroupBtn.style.display = 'inline-flex'; // Make it visible
          }
     };
 
@@ -612,12 +788,12 @@
         const messageItem = document.querySelector(`.message-item[data-message-id="${msgId}"]`);
         if (messageItem) {
             const avatarElement = messageItem.querySelector('.chat-avatar');
-            if (avatarElement) {
-                if (isSpeaking) {
-                    avatarElement.classList.add('speaking');
-                } else {
-                    avatarElement.classList.remove('speaking');
-                }
+            if (isSpeaking) {
+                messageItem.classList.add('speaking-active');
+                if (avatarElement) avatarElement.classList.add('speaking');
+            } else {
+                messageItem.classList.remove('speaking-active');
+                if (avatarElement) avatarElement.classList.remove('speaking');
             }
         }
     };

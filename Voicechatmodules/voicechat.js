@@ -72,35 +72,85 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Event Listeners ---
     closeBtn.addEventListener('click', async () => {
-        await saveVoiceChatToHistory();
-        window.close();
+        closeBtn.disabled = true;
+        try {
+            await saveVoiceChatToHistory();
+        } finally {
+            window.close();
+        }
     });
 
-    async function saveVoiceChatToHistory() {
-        if (!agentId || currentChatHistory.length === 0) return;
+    function getVoiceTopicId() {
+        return agentId ? `voicechat_${agentId}` : null;
+    }
 
-        // Filter out thinking messages and system messages if they are just placeholders
-        const validMessages = currentChatHistory.filter(msg => !msg.isThinking && msg.role !== 'system');
-        if (validMessages.length === 0) return;
+    function isEventForCurrentVoiceSession(eventData) {
+        if (!eventData || !activeStreamingMessageId || eventData.messageId !== activeStreamingMessageId) {
+            return false;
+        }
+
+        const expectedTopicId = getVoiceTopicId();
+        const eventTopicId = eventData.context?.topicId;
+        const eventAgentId = eventData.context?.agentId;
+
+        return !!expectedTopicId && eventTopicId === expectedTopicId && eventAgentId === agentId;
+    }
+
+    async function waitForActiveStreamToSettle(timeoutMs = 4000) {
+        if (!activeStreamingMessageId) return true;
+
+        const pendingMessageId = activeStreamingMessageId;
+        console.log(`[VoiceChat] Waiting for active stream to settle before close: ${pendingMessageId}`);
+
+        return await new Promise((resolve) => {
+            let settled = false;
+            const startedAt = Date.now();
+
+            const check = () => {
+                if (settled) return;
+                if (activeStreamingMessageId !== pendingMessageId) {
+                    settled = true;
+                    resolve(true);
+                    return;
+                }
+
+                if (Date.now() - startedAt >= timeoutMs) {
+                    console.warn(`[VoiceChat] Timed out while waiting stream to settle: ${pendingMessageId}`);
+                    settled = true;
+                    resolve(false);
+                    return;
+                }
+
+                setTimeout(check, 80);
+            };
+
+            check();
+        });
+    }
+
+    async function saveVoiceChatToHistory() {
+        if (!agentId) return;
+
+        await waitForActiveStreamToSettle();
+
+        const persistedHistory = currentChatHistory.filter(msg => !msg.isThinking && msg.role !== 'system');
+        if (persistedHistory.length === 0) return;
 
         console.log('[VoiceChat] Saving chat history before exit...');
         try {
-            // 1. Create a new topic for this voice chat
             const timestamp = new Date().toLocaleString();
             const defaultTitle = `语音通话 ${timestamp}`;
             const result = await window.electronAPI.createNewTopicForAgent(agentId, defaultTitle);
 
             if (result && result.success && result.topicId) {
                 const newTopicId = result.topicId;
-                
-                // 2. Save the history to the new topic
-                await window.electronAPI.saveChatHistory(agentId, newTopicId, currentChatHistory);
+
+                await window.electronAPI.saveChatHistory(agentId, newTopicId, persistedHistory);
                 console.log(`[VoiceChat] History saved to new topic: ${newTopicId}`);
 
-                // 3. Attempt to summarize the topic title
                 if (window.summarizeTopicFromMessages) {
                     const agentName = agentConfig?.name || 'AI';
-                    const summarizedTitle = await window.summarizeTopicFromMessages(validMessages, agentName);
+                    const summarizedTitle = await window.summarizeTopicFromMessages(persistedHistory, agentName);
                     if (summarizedTitle) {
                         await window.electronAPI.saveAgentTopicTitle(agentId, newTopicId, summarizedTitle);
                         console.log(`[VoiceChat] Topic summarized: ${summarizedTitle}`);
@@ -113,6 +163,34 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('[VoiceChat] Error saving voice chat history:', error);
         }
     }
+    // --- Click Handler for Images and Links ---
+    chatMessagesDiv.addEventListener('click', (event) => {
+        const target = event.target;
+
+        // Handle image clicks
+        if (target.tagName === 'IMG' && target.closest('.message-content')) {
+            event.preventDefault();
+            const imageUrl = target.src;
+            const imageTitle = target.alt || '图片预览';
+            const theme = document.body.classList.contains('light-theme') ? 'light' : 'dark';
+            console.log(`[VoiceChat] Image clicked. Opening in new window. URL: ${imageUrl}`);
+            window.electronAPI.openImageInNewWindow(imageUrl, imageTitle, theme);
+            return;
+        }
+
+        // Handle link clicks
+        if (target.tagName === 'A' && target.href) {
+            event.preventDefault();
+            const url = target.href;
+            // Ensure it's a web link before opening
+            if (url.startsWith('http:') || url.startsWith('https:')) {
+                console.log(`[VoiceChat] Link clicked. Opening externally. URL: ${url}`);
+                window.electronAPI.sendOpenExternalLink(url);
+            }
+            return;
+        }
+    });
+
     sendMessageBtn.addEventListener('click', () => sendMessage(messageInput.value));
     messageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -145,6 +223,20 @@ document.addEventListener('DOMContentLoaded', () => {
         check();
     }
 
+    function getVoiceRuntimeSettings(settings = {}) {
+        return {
+            voiceMode: settings.voiceMode || 'local',
+            speechRecognizerBrowserPath: settings.speechRecognizerBrowserPath || '',
+            speechRecognizerPagePath: settings.speechRecognizerPagePath || 'Voicechatmodules/recognizer.html',
+            voiceNetworkSettings: settings.voiceNetworkSettings || { sovitsUrl: '', sovitsKey: '' },
+            voiceLocalSettings: settings.voiceLocalSettings || { providerUrl: '', providerKey: '' }
+        };
+    }
+
+    function getVoiceModeLabel(runtimeSettings) {
+        return runtimeSettings.voiceMode === 'network' ? '网络语音模式' : '本地语音模式';
+    }
+
     waitForElectronAPI(() => {
         window.electronAPI.onVoiceChatData(async (data) => {
         console.log('Received voice chat data:', data);
@@ -152,6 +244,10 @@ document.addEventListener('DOMContentLoaded', () => {
         
         agentId = receivedAgentId;
         globalSettings = await window.electronAPI.loadSettings();
+        globalSettings = {
+            ...globalSettings,
+            ...getVoiceRuntimeSettings(globalSettings)
+        };
         agentConfig = await window.electronAPI.getAgentConfig(agentId);
 
         if (!agentConfig || agentConfig.error) {
@@ -163,7 +259,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.classList.toggle('light-theme', theme === 'light');
         document.body.classList.toggle('dark-theme', theme === 'dark');
         agentAvatarImg.src = agentConfig.avatarUrl || '../assets/default_avatar.png';
-        agentNameSpan.textContent = `${agentConfig.name} - 语音模式`;
+        agentNameSpan.textContent = `${agentConfig.name} - ${getVoiceModeLabel(globalSettings)}`;
 
         initializeRenderer();
         });
@@ -190,7 +286,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 set: (newSettings) => { globalSettings = newSettings; }
             };
             const topicIdRef = {
-                get: () => `voicechat_${agentId}`,
+                get: () => getVoiceTopicId(),
                 set: () => {}
             };
             window.messageRenderer.initializeMessageRenderer({
@@ -216,7 +312,7 @@ document.addEventListener('DOMContentLoaded', () => {
             inputMode = 'voice';
             keyboardIcon.style.display = 'none';
             micIcon.style.display = 'block';
-            messageInput.placeholder = '正在聆听...';
+            messageInput.placeholder = `正在聆听... (${getVoiceModeLabel(globalSettings)})`;
             messageInput.value = '';
             window.electronAPI.startSpeechRecognition();
         } else {
@@ -257,7 +353,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const context = {
             agentId: agentId,
-            topicId: `voicechat_${agentId}`
+            topicId: getVoiceTopicId()
         };
 
         try {
@@ -307,7 +403,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const activeStreams = new Set();
     window.electronAPI.onVCPStreamEvent((eventData) => {
-        if (!window.messageRenderer || eventData.messageId !== activeStreamingMessageId) return;
+        if (!window.messageRenderer || !isEventForCurrentVoiceSession(eventData)) return;
 
         const { messageId, type, chunk, error, context } = eventData;
 
@@ -367,10 +463,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (messageElement) {
             const contentElement = messageElement.querySelector('.md-content');
-            if (contentElement) {
+            if (contentElement && window.messageRenderer?.extractSpeakableTextFromContentElement) {
+                textToSpeak = window.messageRenderer.extractSpeakableTextFromContentElement(contentElement);
+            } else if (contentElement) {
                 const contentClone = contentElement.cloneNode(true);
-                contentClone.querySelectorAll('.vcp-tool-use-bubble').forEach(el => el.remove());
-                textToSpeak = contentClone.innerText || '';
+                contentClone.querySelectorAll('.vcp-tool-use-bubble, .vcp-tool-result-bubble, .maid-diary-bubble, .vcp-role-divider, .vcp-thought-chain-bubble, style, script').forEach(el => el.remove());
+                textToSpeak = (contentClone.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
             } else {
                 textToSpeak = messageElement.textContent || messageElement.innerText;
             }
@@ -403,7 +501,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         console.log(`[VoiceChat] 找到备用匹配元素: ${idAttr}`);
                         const contentElement = item.querySelector('.md-content');
                         if (contentElement) {
-                            const backupText = contentElement.innerText || '';
+                            const backupText = window.messageRenderer?.extractSpeakableTextFromContentElement
+                                ? window.messageRenderer.extractSpeakableTextFromContentElement(contentElement)
+                                : (contentElement.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
                             if (backupText.trim().length > 0) {
                                 console.log(`[VoiceChat] 使用备用元素提取到文本长度: ${backupText.trim().length}`);
                                 playTTS(backupText.trim(), messageId);
@@ -424,7 +524,11 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        console.log(`[VoiceChat] Requesting TTS for message ${msgId}`);
+        console.log(`[VoiceChat] Requesting TTS for message ${msgId}`, {
+            voiceMode: globalSettings.voiceMode || 'local',
+            networkSovitsUrl: globalSettings.voiceNetworkSettings?.sovitsUrl || '',
+            localProviderUrl: globalSettings.voiceLocalSettings?.providerUrl || ''
+        });
         window.electronAPI.sovitsSpeak({
             text: text,
             voice: agentConfig.ttsVoicePrimary,

@@ -1,15 +1,23 @@
 // modules/ipc/windowHandlers.js
 const { ipcMain, app, BrowserWindow } = require('electron');
 const path = require('path');
+const { PRELOAD_ROLES, resolveAppPreload } = require('../services/preloadPaths');
 
 /**
  * Initializes window control IPC handlers.
  * @param {BrowserWindow} mainWindow The main window instance.
  * @param {BrowserWindow[]} openChildWindows - A reference to the array holding all open child windows.
  */
+let ipcHandlersRegistered = false;
+let forumWindowInstance = null;
+let memoWindowInstance = null;
+let taskWindowInstance = null;
+
 function initialize(mainWindow, openChildWindows) {
-    let forumWindowInstance = null;
-    let memoWindowInstance = null;
+    if (ipcHandlersRegistered) {
+        return;
+    }
+
     // --- Window Control IPC Handlers ---
     ipcMain.on('minimize-window', (event) => {
         const win = BrowserWindow.fromWebContents(event.sender);
@@ -50,6 +58,11 @@ function initialize(mainWindow, openChildWindows) {
                     win.hide();
                 } else {
                     // 桌面窗口不存在时，正常退出
+                    // 优化：立即隐藏所有窗口提供即时反馈，因为主进程清理（如音频引擎、分布式服务器）可能耗时数秒
+                    BrowserWindow.getAllWindows().forEach(w => {
+                        if (!w.isDestroyed()) w.hide();
+                    });
+                    app.isQuitting = true; // 标记正在退出，允许窗口关闭事件通过
                     app.quit();
                 }
             } else {
@@ -95,7 +108,7 @@ function initialize(mainWindow, openChildWindows) {
             frame: false, // 移除原生窗口框架
             ...(process.platform === 'darwin' ? {} : { titleBarStyle: 'hidden' }), // 隐藏标题栏
             webPreferences: {
-                preload: path.join(__dirname, '../../preload.js'), // Correct path from this file's location
+                preload: resolveAppPreload(app.getAppPath(), PRELOAD_ROLES.UTILITY),
                 contextIsolation: true,
                 nodeIntegration: false,
             },
@@ -143,7 +156,7 @@ function initialize(mainWindow, openChildWindows) {
             frame: false,
             ...(process.platform === 'darwin' ? {} : { titleBarStyle: 'hidden' }),
             webPreferences: {
-                preload: path.join(__dirname, '../../preload.js'),
+                preload: resolveAppPreload(app.getAppPath(), PRELOAD_ROLES.UTILITY),
                 contextIsolation: true,
                 nodeIntegration: false,
             },
@@ -200,7 +213,7 @@ function initialize(mainWindow, openChildWindows) {
             frame: false,
             ...(process.platform === 'darwin' ? {} : { titleBarStyle: 'hidden' }),
             webPreferences: {
-                preload: path.join(__dirname, '../../preload.js'),
+                preload: resolveAppPreload(app.getAppPath(), PRELOAD_ROLES.UTILITY),
                 contextIsolation: true,
                 nodeIntegration: false,
             },
@@ -234,9 +247,17 @@ function initialize(mainWindow, openChildWindows) {
             if (index > -1) {
                 openChildWindows.splice(index, 1);
             }
-            memoWindowInstance = null;
+        memoWindowInstance = null;
         });
     });
+
+    ipcMain.on('open-task-window', async (event) => {
+        const windowService = require('../services/windowService');
+        const WINDOW_APP_IDS = require('../services/windowAppIds');
+        await windowService.open(WINDOW_APP_IDS.TASK);
+    });
+
+    ipcHandlersRegistered = true;
 }
 
 module.exports = {

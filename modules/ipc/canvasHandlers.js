@@ -2,6 +2,9 @@ const { ipcMain, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs-extra');
 const chokidar = require('chokidar');
+const windowService = require('../services/windowService');
+const WINDOW_APP_IDS = require('../services/windowAppIds');
+const { PRELOAD_ROLES, resolveProjectPreload } = require('../services/preloadPaths');
 
 let mainWindow;
 let openChildWindows;
@@ -10,6 +13,7 @@ let canvasWindow = null;
 let fileWatcher = null;
 const internalSaveInProgress = new Set(); // Track internal saves
 let initialFilePath = null;
+let ipcHandlersRegistered = false;
 const SUPPORTED_EXTENSIONS = [
     '.txt', '.js', '.py', '.css', '.html', '.json', '.md', '.rs', '.ts',
     '.cpp', '.h', '.cs', '.java', '.go', '.rb', '.php', '.swift', '.kt',
@@ -22,6 +26,10 @@ function initialize(config) {
     
     // Ensure the canvas directory exists
     fs.ensureDirSync(CANVAS_CACHE_DIR);
+
+    if (ipcHandlersRegistered) {
+        return;
+    }
 
     ipcMain.handle('open-canvas-window', createCanvasWindow);
     ipcMain.on('canvas-ready', handleCanvasReady);
@@ -38,9 +46,14 @@ function initialize(config) {
             handleLoadCanvasFile({ sender: canvasWindow.webContents }, filePath);
         }
     });
+
+    ipcHandlersRegistered = true;
 }
 
-async function createCanvasWindow(filePath = null) {
+async function createCanvasWindow(eventOrFilePath = null, maybeFilePath = null) {
+    const filePath = eventOrFilePath && typeof eventOrFilePath === 'object' && 'sender' in eventOrFilePath
+        ? maybeFilePath
+        : eventOrFilePath;
     console.log('[CanvasHandlers] Received request to open canvas window.');
     if (canvasWindow && !canvasWindow.isDestroyed()) {
         if (!canvasWindow.isVisible()) {
@@ -66,7 +79,7 @@ async function createCanvasWindow(filePath = null) {
         frame: false,
         ...(process.platform === 'darwin' ? {} : { titleBarStyle: 'hidden' }),
         webPreferences: {
-            preload: path.join(__dirname, '..', '..', 'preload.js'),
+            preload: resolveProjectPreload(path.join(__dirname, '..', '..'), PRELOAD_ROLES.UTILITY),
             contextIsolation: true,
             nodeIntegration: false,
         },
@@ -75,6 +88,7 @@ async function createCanvasWindow(filePath = null) {
     });
 
     await canvasWindow.loadFile(path.join(__dirname, '..', '..', 'Canvasmodules', 'canvas.html'));
+    windowService.attachWindow(WINDOW_APP_IDS.CANVAS, canvasWindow);
 
     openChildWindows.push(canvasWindow);
 

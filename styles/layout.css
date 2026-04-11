@@ -97,17 +97,28 @@ body.light-theme .resizer {
     -webkit-backdrop-filter: blur(12px);
     min-width: 180px;
     max-width: 600px;
-    padding: 15px 10px 15px 17px;
+    padding: 9px 3px 15px 8px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     transition: width 0.3s ease, min-width 0.3s ease, padding 0.3s ease, opacity 0.3s ease;
     overflow-x: hidden;
+    overflow-y: hidden;
     flex-shrink: 0;
     text-shadow: var(--panel-text-shadow);
 }
 body.light-theme .sidebar {
     background-color: var(--panel-bg-light);
+}
+
+.sidebar {
+    container-type: inline-size;
+    container-name: sidebar;
+}
+
+.sidebar:has(#tabContentSettings.active) {
+    padding-right: 8px;
+    overflow-y: hidden;
 }
 
 /* --- Main Content (Chat Area) --- */
@@ -130,6 +141,8 @@ body.light-theme .sidebar {
     background-color: var(--panel-bg-dark); /* 使用半透明变量 */
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
+    container-type: inline-size;
+    container-name: notifications-sidebar;
     min-width: 220px; /* Adjusted min-width */
     max-width: 600px; /* Added max-width */
     /* REMOVE border-left */
@@ -189,7 +202,7 @@ body.light-theme .notifications-sidebar {
     position: fixed; /* 使用fixed定位，因为它要覆盖的title-bar也是fixed */
     left: 0;
     /* right: 0; */ /* 宽度由JS动态控制 */
-    height: 16px; /* 羽化条的高度，这个值可以微调以达到最佳效果 */
+    height: 8px; /* 羽化条的高度，这个值可以微调以达到最佳效果 */
     z-index: 1002; /* 必须比 title-bar (1001) 的 z-index 更高 */
 
     /* 2. 关键效果：二次模糊 */
@@ -226,7 +239,7 @@ body.light-theme .notifications-sidebar {
        所以 top 值设为 30px - (16px / 2) = 22px，
        这样羽化条的中心就精准地对齐了接缝。
     */
-    top: 22px; 
+    top: 26px; 
 }
 
 /* --- Sidebar Hide/Show Logic --- */
@@ -319,3 +332,5 @@ body.light-theme .emoticon-panel {
     color: var(--secondary-text);
     font-size: 0.9em;
 }
+
+

@@ -1,5 +1,7 @@
 // modules/forum.js
 
+const api = window.utilityAPI || window.electronAPI;
+
 // ========== Global State ==========
 let apiAuthHeader = null;
 let forumConfig = {
@@ -12,8 +14,10 @@ let allPosts = [];
 let serverBaseUrl = '';
 let resizeTimeout = null;
 let avatarCache = {}; // Cache for loaded avatars
+let avatarPendingCache = new Map(); // Cache pending avatar requests
 let agentsList = []; // List of all agents with their names
 let emoticonLibrary = []; // Emoticon library for URL fixing
+let lastRenderedPostKeys = '';
 
 // ========== DOM Elements ==========
 const loginView = document.getElementById('login-view');
@@ -48,9 +52,15 @@ const settingsError = document.getElementById('settings-error');
 
 
 // ========== Window Controls ==========
-document.getElementById('minimize-forum-btn')?.addEventListener('click', () => window.electronAPI?.minimizeWindow());
-document.getElementById('maximize-forum-btn')?.addEventListener('click', () => window.electronAPI?.maximizeWindow());
-document.getElementById('close-forum-btn')?.addEventListener('click', () => window.close());
+document.getElementById('minimize-forum-btn')?.addEventListener('click', () => api?.minimizeWindow());
+document.getElementById('maximize-forum-btn')?.addEventListener('click', () => api?.maximizeWindow());
+document.getElementById('close-forum-btn')?.addEventListener('click', () => {
+    if (api?.closeWindow) {
+        api.closeWindow();
+    } else {
+        window.close();
+    }
+});
 
 // ========== Initialization & Config ==========
 // ========== Theme Management ==========
@@ -61,21 +71,18 @@ function applyTheme(theme) {
 document.addEventListener('DOMContentLoaded', async () => {
     window.addEventListener('resize', handleResize);
 
-    // Emoticon manager initialization
-    if (window.emoticonManager) {
-        const emoticonPanel = document.getElementById('emoticon-panel');
-        if (emoticonPanel) {
-            window.emoticonManager.initialize({ emoticonPanel });
-        }
+    const emoticonPanel = document.getElementById('emoticon-panel');
+    if (window.emoticonManager && emoticonPanel) {
+        await window.emoticonManager.initialize({ emoticonPanel });
     }
 
     await loadForumConfig();
     await loadAgentsList(); // Load agents list for avatar matching
     await loadEmoticonLibrary(); // Load emoticon library for URL fixing
     try {
-        const settings = await window.electronAPI?.loadSettings();
+        const settings = await api?.loadSettings();
         if (settings?.currentThemeMode) applyTheme(settings.currentThemeMode);
-        window.electronAPI?.onThemeUpdated(applyTheme); // Listen for live theme changes
+        api?.onThemeUpdated(applyTheme); // Listen for live theme changes
     } catch (e) { /* ignore */ }
 
     // Intercept external links and open them in the default browser
@@ -84,19 +91,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Check if it's an external link
         if (link && (link.protocol === 'http:' || link.protocol === 'https:')) {
             event.preventDefault();
-            window.electronAPI?.openExternal(link.href);
+            api?.sendOpenExternalLink?.(link.href);
         }
     });
 });
 
 function handleResize() {
     clearTimeout(resizeTimeout);
-    resizeTimeout = setTimeout(applyFilters, 200);
+    resizeTimeout = setTimeout(() => {
+        renderCurrentFilteredPosts({ force: false });
+    }, 200);
 }
 
 async function loadForumConfig() {
     try {
-        const config = await window.electronAPI?.loadForumConfig();
+        const config = await api?.loadForumConfig();
         if (config && !config.error) {
             forumConfig = { ...forumConfig, ...config };
             if (forumConfig.username) usernameInput.value = forumConfig.username;
@@ -121,16 +130,15 @@ function switchView(viewName) {
     if (viewName === 'login') loginView.classList.add('active');
     if (viewName === 'forum') {
         forumView.classList.add('active');
-        // Recalculate masonry when view becomes visible as width might have changed
-        // The grid layout adjusts automatically, just need to ensure posts are rendered.
-        setTimeout(applyFilters, 50);
+        // 论坛视图显示后再做一次轻量重渲染，避免隐藏状态下读取宽度
+        setTimeout(() => renderCurrentFilteredPosts({ force: false }), 50);
     }
 }
 
 // ========== API & Auth ==========
 async function getServerUrl() {
     try {
-        const settings = await window.electronAPI.loadSettings();
+        const settings = await api.loadSettings();
         if (!settings?.vcpServerUrl) throw new Error('VCP Server URL not configured');
         serverBaseUrl = settings.vcpServerUrl.replace(/\/v1\/chat\/completions\/?$/, '');
         if (!serverBaseUrl.endsWith('/')) serverBaseUrl += '/';
@@ -179,7 +187,7 @@ async function handleLogin() {
         forumConfig.username = user;
         forumConfig.password = pass;
         forumConfig.rememberCredentials = rememberMeCheckbox.checked;
-        window.electronAPI?.saveForumConfig(forumConfig);
+        api?.saveForumConfig(forumConfig);
 
         switchView('forum');
         loadPosts();
@@ -205,7 +213,7 @@ function showError(element, message) {
 // ========== Avatar Loading Functions ==========
 async function loadAgentsList() {
     try {
-        const agentsData = await window.electronAPI?.loadAgentsList();
+        const agentsData = await api?.loadAgentsList();
         if (agentsData && Array.isArray(agentsData)) {
             agentsList = agentsData;
             console.log('[Forum] Loaded', agentsList.length, 'agents for avatar matching');
@@ -217,14 +225,21 @@ async function loadAgentsList() {
 
 // ========== Emoticon URL Fixer ==========
 async function loadEmoticonLibrary() {
+    if (!api?.getEmoticonLibrary) {
+        emoticonLibrary = [];
+        return;
+    }
+
     try {
-        const library = await window.electronAPI?.getEmoticonLibrary();
-        if (library && Array.isArray(library)) {
+        const library = await api.getEmoticonLibrary();
+        if (Array.isArray(library)) {
             emoticonLibrary = library;
-            console.log('[Forum] Loaded', emoticonLibrary.length, 'emoticons for URL fixing');
+            return;
         }
+
+        emoticonLibrary = [];
     } catch (error) {
-        console.error('[Forum] Failed to load emoticon library:', error);
+        emoticonLibrary = [];
     }
 }
 
@@ -418,8 +433,8 @@ function setupImageViewer(container) {
         img.style.cursor = 'pointer';
         img.addEventListener('click', (e) => {
             e.stopPropagation(); // Prevent the post from closing or other parent events
-            if (window.electronAPI?.openImageViewer) {
-                window.electronAPI.openImageViewer({
+            if (api?.openImageViewer) {
+                api.openImageViewer({
                     src: img.src,
                     title: '图片查看' // A generic title for the viewer window
                 });
@@ -436,13 +451,18 @@ async function getAvatarForUser(username) {
         return avatarCache[username];
     }
 
+    if (avatarPendingCache.has(username)) {
+        return avatarPendingCache.get(username);
+    }
+
+    const avatarPromise = (async () => {
     try {
         // Check if it's the current user (check both replyUsername and username)
         const isCurrentUser = (forumConfig.replyUsername && username === forumConfig.replyUsername) ||
                              (forumConfig.username && username === forumConfig.username);
         
         if (isCurrentUser) {
-            const userAvatar = await window.electronAPI?.loadUserAvatar();
+            const userAvatar = await api?.loadUserAvatar();
             if (userAvatar) {
                 avatarCache[username] = userAvatar;
                 return userAvatar;
@@ -455,7 +475,7 @@ async function getAvatarForUser(username) {
             const usernameLower = username.toLowerCase();
             
             if (agentNameLower.includes(usernameLower) || usernameLower.includes(agentNameLower)) {
-                const agentAvatar = await window.electronAPI?.loadAgentAvatar(agent.folder);
+                const agentAvatar = await api?.loadAgentAvatar(agent.folder);
                 if (agentAvatar) {
                     avatarCache[username] = agentAvatar;
                     return agentAvatar;
@@ -468,8 +488,15 @@ async function getAvatarForUser(username) {
         return null;
     } catch (error) {
         console.error('[Forum] Error loading avatar for', username, error);
+        avatarCache[username] = null;
         return null;
+    } finally {
+        avatarPendingCache.delete(username);
     }
+    })();
+
+    avatarPendingCache.set(username, avatarPromise);
+    return avatarPromise;
 }
 
 // ========== Settings Modal Logic ==========
@@ -502,7 +529,7 @@ async function saveSettings() {
     saveSettingsBtn.textContent = '保存中...';
     saveSettingsBtn.disabled = true;
     try {
-        await window.electronAPI?.saveForumConfig(newConfig);
+        await api?.saveForumConfig(newConfig);
         forumConfig = newConfig;
         // Update login form fields as well, in case user logs out
         usernameInput.value = forumConfig.username;
@@ -537,7 +564,7 @@ async function loadPosts() {
             allPosts = data.posts || [];
             updateBoardFilter(allPosts);
             updateBoardDatalist(allPosts);
-            renderWaterfall(allPosts);
+            renderCurrentFilteredPosts({ force: true });
         })
         .catch(error => {
             // Log errors immediately as well.
@@ -584,24 +611,60 @@ function updateBoardDatalist(posts) {
     });
 }
 
-function renderWaterfall(postsToRender) {
-    masonryContainer.innerHTML = ''; // Clear the grid
+function getFilteredPosts() {
+    const term = searchInput.value.toLowerCase().trim();
+    const board = boardFilter.value;
 
-    if (!postsToRender || postsToRender.length === 0) return;
+    return allPosts.filter(p => {
+        const matchSearch = !term || p.title.toLowerCase().includes(term) || p.author.toLowerCase().includes(term);
+        const matchBoard = board === 'all' || p.board === board;
+        return matchSearch && matchBoard;
+    });
+}
 
-    const sorted = [...postsToRender].sort((a, b) => {
+function getSortedPosts(postsToRender) {
+    return [...postsToRender].sort((a, b) => {
         if (a.title.includes('[置顶]') && !b.title.includes('[置顶]')) return -1;
         if (!a.title.includes('[置顶]') && b.title.includes('[置顶]')) return 1;
-        // Use the new robust date parser. Fallback to epoch start if date is invalid.
         const dateB = parseForumDate(b.mtime || b.lastReplyAt || b.timestamp) || new Date(0);
         const dateA = parseForumDate(a.mtime || a.lastReplyAt || a.timestamp) || new Date(0);
         return dateB - dateA;
     });
+}
 
+function getPostRenderKey(postsToRender) {
+    return postsToRender.map(post => `${post.uid}:${post.mtime || post.lastReplyAt || post.timestamp || ''}`).join('|');
+}
+
+function renderCurrentFilteredPosts({ force = false } = {}) {
+    const filtered = getFilteredPosts();
+    const renderKey = getPostRenderKey(filtered);
+
+    if (!force && renderKey === lastRenderedPostKeys) {
+        return;
+    }
+
+    renderWaterfall(filtered);
+}
+
+function renderWaterfall(postsToRender) {
+    masonryContainer.innerHTML = '';
+
+    if (!postsToRender || postsToRender.length === 0) {
+        lastRenderedPostKeys = '';
+        return;
+    }
+
+    const sorted = getSortedPosts(postsToRender);
+    lastRenderedPostKeys = getPostRenderKey(postsToRender);
+
+    const fragment = document.createDocumentFragment();
     sorted.forEach((post, index) => {
         const card = createPostCard(post, index);
-        masonryContainer.appendChild(card); // Append directly to the grid container
+        fragment.appendChild(card);
     });
+
+    masonryContainer.appendChild(fragment);
 }
 
 function createPostCard(post, index) {
@@ -678,9 +741,13 @@ function createPostCard(post, index) {
     
     // Async load avatar(s)
     const avatars = el.querySelectorAll('.author-avatar');
-    avatars.forEach(avatarEl => {
-        loadAvatarForElement(avatarEl, avatarEl.dataset.author);
-    });
+    if (avatars.length > 0) {
+        requestDeferredWork(() => {
+            avatars.forEach(avatarEl => {
+                loadAvatarForElement(avatarEl, avatarEl.dataset.author);
+            });
+        });
+    }
     
     return el;
 }
@@ -1068,24 +1135,24 @@ function renderFullContent(container, markdown, uid) {
 
     previewEl.innerHTML = window.marked ? marked.parse(enhanceMarkdown(postContentMd)) : `<pre>${escapeHtml(postContentMd)}</pre>`;
     previewEl.dataset.rawContent = postContentMd; // Store raw content for editing
-    
-    // Apply bold formatting to handle any remaining ** markers
-    applyBoldFormatting(previewEl);
-    
-    // KaTeX auto-rendering
-    if (window.renderMathInElement) {
-        renderMathInElement(previewEl, {
-            delimiters: [
-                {left: "$$", right: "$$", display: true},
-                {left: "$", right: "$", display: false},
-                {left: "\\(", right: "\\)", display: false},
-                {left: "\\[", right: "\\]", display: true}
-            ]
-        });
-    }
-    // Setup emoticon fixer for main content
-    setupEmoticonFixer(previewEl);
-    setupImageViewer(previewEl);
+
+    requestDeferredWork(() => {
+        applyBoldFormatting(previewEl);
+
+        if (window.renderMathInElement) {
+            renderMathInElement(previewEl, {
+                delimiters: [
+                    {left: "$$", right: "$$", display: true},
+                    {left: "$", right: "$", display: false},
+                    {left: "\\(", right: "\\)", display: false},
+                    {left: "\\[", right: "\\]", display: true}
+                ]
+            });
+        }
+
+        setupEmoticonFixer(previewEl);
+        setupImageViewer(previewEl);
+    });
 
     // Add post actions (edit/delete)
     const postActions = document.createElement('div');
@@ -1166,21 +1233,22 @@ function renderFullContent(container, markdown, uid) {
             // Setup emoticon fixer and bold formatting for reply content
             const replyContentEl = replyItem.querySelector('.reply-content');
             if (replyContentEl) {
-                applyBoldFormatting(replyContentEl);
-                setupEmoticonFixer(replyContentEl);
-                setupImageViewer(replyContentEl);
+                requestDeferredWork(() => {
+                    applyBoldFormatting(replyContentEl);
+                    setupEmoticonFixer(replyContentEl);
+                    setupImageViewer(replyContentEl);
 
-                // KaTeX auto-rendering for replies
-                if (window.renderMathInElement) {
-                    renderMathInElement(replyContentEl, {
-                        delimiters: [
-                            {left: "$$", right: "$$", display: true},
-                            {left: "$", right: "$", display: false},
-                            {left: "\\(", right: "\\)", display: false},
-                            {left: "\\[", right: "\\]", display: true}
-                        ]
-                    });
-                }
+                    if (window.renderMathInElement) {
+                        renderMathInElement(replyContentEl, {
+                            delimiters: [
+                                {left: "$$", right: "$$", display: true},
+                                {left: "$", right: "$", display: false},
+                                {left: "\\(", right: "\\)", display: false},
+                                {left: "\\[", right: "\\]", display: true}
+                            ]
+                        });
+                    }
+                });
             }
             
             // Add event listeners for action buttons
@@ -1364,17 +1432,10 @@ async function handleQuickReply(uid, container) {
 }
 
 function applyFilters() {
-    const term = searchInput.value.toLowerCase().trim();
-    const board = boardFilter.value;
-    const filtered = allPosts.filter(p => {
-        const matchSearch = !term || p.title.toLowerCase().includes(term) || p.author.toLowerCase().includes(term);
-        const matchBoard = board === 'all' || p.board === board;
-        return matchSearch && matchBoard;
-    });
-    renderWaterfall(filtered);
+    renderCurrentFilteredPosts({ force: true });
 }
 
-searchInput.addEventListener('input', applyFilters);
+searchInput.addEventListener('input', debounce(() => applyFilters(), 120));
 boardFilter.addEventListener('change', applyFilters);
 refreshBtn.addEventListener('click', loadPosts);
 
@@ -1414,7 +1475,7 @@ submitPostBtn.addEventListener('click', async () => {
     submitPostBtn.disabled = true;
     submitPostBtn.textContent = '发布中...';
     try {
-        const settings = await window.electronAPI.loadSettings();
+        const settings = await api.loadSettings();
         if (!settings?.vcpApiKey) throw new Error('API Key missing');
         const toolRequest = `<<<[TOOL_REQUEST]>>>
 tool_name:「始」VCPForum「末」,
@@ -1440,6 +1501,22 @@ content:「始」${content}「末」
         submitPostBtn.textContent = '🚀 发布';
     }
 });
+
+function requestDeferredWork(callback) {
+    if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => callback(), { timeout: 250 });
+        return;
+    }
+    setTimeout(callback, 0);
+}
+
+function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+    };
+}
 
 function escapeHtml(str) {
     return (str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");

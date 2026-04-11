@@ -6,6 +6,9 @@ const fs = require('fs-extra');
 const { Worker } = require('worker_threads');
 const lyricFetcher = require('../lyricFetcher'); // Import the new lyric fetcher
 const webdavManager = require('../webdavManager'); // WebDAV support
+const windowService = require('../services/windowService');
+const WINDOW_APP_IDS = require('../services/windowAppIds');
+const { PRELOAD_ROLES, resolveProjectPreload } = require('../services/preloadPaths');
 const AUDIO_ENGINE_URL = 'http://127.0.0.1:63789';
 let fetch;
 
@@ -20,6 +23,7 @@ let startAudioEngine; // To hold the function from main.js
 let stopAudioEngine; // To hold the function from main.js
 let musicWindowPromise = null; // To handle concurrent window creation requests
 let pendingTrackForNewWindow = null; // 用于在新窗口创建时传递待播放的曲目
+let ipcHandlersRegistered = false;
 
 // --- Singleton Music Window Creation Function ---
 function createOrFocusMusicWindow() {
@@ -67,7 +71,7 @@ function createOrFocusMusicWindow() {
             ...(process.platform === 'darwin' ? {} : { titleBarStyle: 'hidden' }),
             modal: false,
             webPreferences: {
-                preload: path.join(__dirname, '..', '..', 'preload.js'),
+                preload: resolveProjectPreload(path.join(__dirname, '..', '..'), PRELOAD_ROLES.UTILITY),
                 contextIsolation: true,
                 nodeIntegration: false,
                 devTools: true
@@ -77,6 +81,7 @@ function createOrFocusMusicWindow() {
         });
 
         musicWindow.loadFile(path.join(__dirname, '..', '..', 'Musicmodules', 'music.html'));
+        windowService.attachWindow(WINDOW_APP_IDS.MUSIC, musicWindow);
 
         openChildWindows.push(musicWindow);
         musicWindow.setMenu(null);
@@ -253,6 +258,11 @@ function initialize(options) {
     MUSIC_PLAYLIST_FILE = path.join(APP_DATA_ROOT_IN_PROJECT, 'songlist.json');
     MUSIC_COVER_CACHE_DIR = path.join(APP_DATA_ROOT_IN_PROJECT, 'MusicCoverCache');
     LYRIC_DIR = path.join(APP_DATA_ROOT_IN_PROJECT, 'lyric');
+
+    if (ipcHandlersRegistered) {
+        console.log('[Music] IPC handlers already registered, skipping duplicate registration.');
+        return;
+    }
 
     const registerIpcHandlers = () => {
         console.log('[Music] registerIpcHandlers called');
@@ -794,6 +804,7 @@ function initialize(options) {
     // 先注册 IPC 处理器，再异步加载 node-fetch
     console.error('[Music] About to call registerIpcHandlers...');
     registerIpcHandlers();
+    ipcHandlersRegistered = true;
     console.error('[Music] IPC handlers registered.');
     console.log('[Music] IPC handlers registered.');
     
@@ -808,5 +819,7 @@ function initialize(options) {
 module.exports = {
     initialize,
     handleMusicControl,
+    createOrFocusMusicWindow,
+    getMusicWindow: () => musicWindow,
     getMusicState: () => ({ musicWindow, currentSongInfo })
 };

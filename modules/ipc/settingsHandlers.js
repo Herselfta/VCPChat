@@ -2,6 +2,7 @@
 const { ipcMain, nativeTheme } = require('electron');
 const fs = require('fs-extra');
 const path = require('path');
+const themeHandlers = require('./themeHandlers');
 
 /**
  * Initializes settings and theme related IPC handlers.
@@ -13,6 +14,7 @@ const path = require('path');
  */
 function initialize(paths) {
     const { SETTINGS_FILE, USER_AVATAR_FILE, AGENT_DIR, settingsManager, agentConfigManager } = paths;
+    const WEBINDEX_MODEL_FILE = path.join(path.dirname(SETTINGS_FILE), 'webindexmodel.json');
 
     // Settings Management
     ipcMain.handle('load-settings', async () => {
@@ -136,6 +138,65 @@ function initialize(paths) {
         }
     });
 
+    ipcMain.handle('load-webindex-models', async () => {
+        try {
+            if (!await fs.pathExists(WEBINDEX_MODEL_FILE)) {
+                return {
+                    success: true,
+                    exists: false,
+                    path: WEBINDEX_MODEL_FILE,
+                    models: [],
+                    defaults: [],
+                    remoteVoices: [],
+                    mergedVoiceOptions: []
+                };
+            }
+
+            const payload = await fs.readJson(WEBINDEX_MODEL_FILE);
+
+            const defaults = Array.isArray(payload?.defaults) ? payload.defaults : [];
+            const remoteVoices = Array.isArray(payload?.remoteVoices) ? payload.remoteVoices : [];
+            const mergedVoiceOptions = Array.isArray(payload?.mergedVoiceOptions)
+                ? payload.mergedVoiceOptions
+                : [...defaults, ...remoteVoices];
+
+            const legacyModels = Array.isArray(payload?.models) ? payload.models : [];
+            const normalizedLegacyModels = legacyModels.flatMap(model => {
+                if (Array.isArray(model?.mergedVoiceOptions) && model.mergedVoiceOptions.length) {
+                    return model.mergedVoiceOptions;
+                }
+                const legacyDefaults = Array.isArray(model?.defaults) ? model.defaults : [];
+                const legacyRemoteVoices = Array.isArray(model?.remoteVoices) ? model.remoteVoices : [];
+                return [...legacyDefaults, ...legacyRemoteVoices];
+            });
+
+            return {
+                success: true,
+                exists: true,
+                path: WEBINDEX_MODEL_FILE,
+                models: mergedVoiceOptions.length ? mergedVoiceOptions : normalizedLegacyModels,
+                defaults,
+                remoteVoices,
+                mergedVoiceOptions: mergedVoiceOptions.length ? mergedVoiceOptions : normalizedLegacyModels,
+                updatedAt: payload?.updatedAt || null,
+                source: payload?.source || 'unknown',
+                providerUrl: payload?.providerUrl || null,
+                modelId: payload?.modelId || null
+            };
+        } catch (error) {
+            console.error('读取 webindexmodel.json 失败:', error);
+            return {
+                success: false,
+                error: error.message,
+                path: WEBINDEX_MODEL_FILE,
+                models: [],
+                defaults: [],
+                remoteVoices: [],
+                mergedVoiceOptions: []
+            };
+        }
+    });
+
     // Theme control
     ipcMain.on('set-theme', async (event, theme) => {
         if (theme === 'light' || theme === 'dark') {
@@ -149,20 +210,11 @@ function initialize(paths) {
                     themeLastUpdated: Date.now()
                 }));
                 console.log(`[Main] Settings.json safely updated: currentThemeMode=${theme}, themeLastUpdated=${Date.now()}`);
-                
-                // 在发生错误时，尝试将主题更新传送给渲染进程
-                // 这样即使设置文件更新失败，用户界面也可以正确显示主题
-                if (event && event.sender && !event.sender.isDestroyed()) {
-                    event.sender.send('theme-updated', { theme, timestamp: Date.now() });
-                }
+                themeHandlers.broadcastThemeUpdate(theme);
             } catch (error) {
                 console.error('[Main] Error updating settings.json for theme change:', error);
                 console.error('[Main] Theme change in nativeTheme was successful, but settings.json update failed');
-                
-                // 在发生错误时，尝试将主题更新传送给渲染进程
-                if (event && event.sender && !event.sender.isDestroyed()) {
-                    event.sender.send('theme-updated', { theme, timestamp: Date.now() });
-                }
+                themeHandlers.broadcastThemeUpdate(theme);
             }
         }
     });

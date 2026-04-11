@@ -3,9 +3,9 @@
 
 class PresetPromptModule {
     constructor(options) {
-        this.agentId = options.agentId;
-        this.config = options.config;
         this.electronAPI = options.electronAPI;
+        this.agentId = null;
+        this.config = null;
         
         this.textarea = null;
         this.presetSelect = null;
@@ -13,12 +13,25 @@ class PresetPromptModule {
         this.presets = [];
         
         // 缓存内容数据
-        this.cachedContent = this.config.presetSystemPrompt || '';
-        this.cachedSelectedPreset = this.config.selectedPreset || '';
+        this.cachedContent = '';
+        this.cachedSelectedPreset = '';
         
         // 默认预设路径
         this.defaultPresetPath = './AppData/systemPromptPresets';
-        this.loadPresetPath();
+    }
+
+    /**
+     * 更新上下文并加载数据
+     * @param {string} agentId 
+     * @param {Object} config 
+     */
+    async updateContext(agentId, config) {
+        this.agentId = agentId;
+        this.config = config;
+        this.cachedContent = config.presetSystemPrompt || '';
+        this.cachedSelectedPreset = config.selectedPreset || '';
+        this.presetPath = this.config.presetPromptPath || this.defaultPresetPath;
+        await this.loadPresets();
     }
 
     /**
@@ -52,7 +65,7 @@ class PresetPromptModule {
      */
     async render(container) {
         container.innerHTML = '';
-        container.className = 'preset-prompt-container';
+        container.classList.add('preset-prompt-container');
 
         // 重新加载预设列表（修复初始化问题）
         await this.loadPresets();
@@ -210,7 +223,7 @@ class PresetPromptModule {
         this.textarea.className = 'prompt-textarea preset-prompt-textarea';
         this.textarea.placeholder = '请输入系统提示词或选择预设...';
         this.textarea.value = this.cachedContent;
-        this.textarea.rows = 10;
+        this.textarea.rows = 3;
 
         // 添加输入事件监听器
         this.textarea.addEventListener('input', () => {
@@ -235,7 +248,7 @@ class PresetPromptModule {
         // 重置高度以获取正确的scrollHeight
         this.textarea.style.height = 'auto';
         // 设置最小高度
-        const minHeight = 120;
+        const minHeight = 60;
         // 根据内容设置高度，但不小于最小高度
         const newHeight = Math.max(minHeight, this.textarea.scrollHeight);
         this.textarea.style.height = newHeight + 'px';
@@ -305,12 +318,21 @@ class PresetPromptModule {
     /**
      * 获取提示词内容
      */
-    async getPrompt() {
-        if (this.textarea) {
-            return this.textarea.value.trim();
-        }
-        return this.cachedContent;
+  async getPrompt() {
+    if (this.textarea) {
+      return this.textarea.value.trim();
     }
+    return this.cachedContent;
+  }
+
+  /**
+   * 销毁模块，释放资源
+   */
+  destroy() {
+    this.textarea = null;
+    this.presetSelect = null;
+    this.container = null;
+  }
 }
 
 // 导出到全局

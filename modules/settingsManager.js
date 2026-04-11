@@ -65,12 +65,21 @@ const settingsManager = (() => {
     // A private variable to hold the regex rules for the currently edited agent
     let currentAgentRegexes = [];
     let currentModelSelectCallback = null;
+    const sectionControllers = new Map();
+    let lastPersistedCollapseStateSignature = '';
+    let scheduleStickyButtonsRefresh = () => { };
+    const initializedCollapseStateAgents = new Set();
+    const promptModeFallbackLabels = {
+        original: '文本',
+        modular: '模块',
+        preset: '预置'
+    };
 
     /**
      * Displays the appropriate settings view (agent, group, or default prompt)
      * based on the currently selected item.
      */
-    function displaySettingsForItem() {
+    async function displaySettingsForItem() {
         const currentSelectedItem = refs.currentSelectedItemRef.get();
 
         const agentSettingsExists = agentSettingsContainer && typeof agentSettingsContainer.style !== 'undefined';
@@ -81,11 +90,11 @@ const settingsManager = (() => {
             selectedItemNameForSettingsSpan.textContent = currentSelectedItem.name || currentSelectedItem.id;
 
             if (currentSelectedItem.type === 'agent') {
-                if (agentSettingsExists) agentSettingsContainer.style.display = 'block';
+                if (agentSettingsExists) agentSettingsContainer.style.display = '';
                 if (groupSettingsExists) groupSettingsContainer.style.display = 'none';
                 itemSettingsContainerTitle.textContent = 'Agent 设置: ';
                 deleteItemBtn.textContent = '删除此 Agent';
-                populateAgentSettingsForm(currentSelectedItem.id, (currentSelectedItem.config || currentSelectedItem));
+                await populateAgentSettingsForm(currentSelectedItem.id, (currentSelectedItem.config || currentSelectedItem));
             } else if (currentSelectedItem.type === 'group') {
                 if (agentSettingsExists) agentSettingsContainer.style.display = 'none';
                 if (groupSettingsExists) groupSettingsContainer.style.display = 'block';
@@ -115,7 +124,7 @@ const settingsManager = (() => {
      */
     async function populateAgentSettingsForm(agentId, agentConfig) {
         if (groupSettingsContainer) groupSettingsContainer.style.display = 'none';
-        if (agentSettingsContainer) agentSettingsContainer.style.display = 'block';
+        if (agentSettingsContainer) agentSettingsContainer.style.display = '';
 
         if (!agentConfig || agentConfig.error) {
             uiHelper.showToastNotification(`加载Agent配置失败: ${agentConfig?.error || '未知错误'}`, 'error');
@@ -128,21 +137,21 @@ const settingsManager = (() => {
         editingAgentIdInput.value = agentId;
         agentNameInput.value = agentConfig.name || agentId;
 
-        // Initialize PromptManager
+        // Initialize PromptManager (Singleton Pattern)
         const systemPromptContainer = document.getElementById('systemPromptContainer');
         if (systemPromptContainer && window.PromptManager) {
-            if (promptManager) {
-                // Save current state before switching
+            if (!promptManager) {
+                promptManager = new window.PromptManager();
+                await promptManager.init({
+                    containerElement: systemPromptContainer,
+                    electronAPI: electronAPI
+                });
+            } else {
+                // Save current state before switching context
                 await promptManager.saveCurrentModeData();
             }
 
-            promptManager = new window.PromptManager();
-            promptManager.init({
-                agentId: agentId,
-                config: agentConfig,
-                containerElement: systemPromptContainer,
-                electronAPI: electronAPI
-            });
+            await promptManager.updateAgentContext(agentId, agentConfig);
         }
 
         agentModelInput.value = agentConfig.model || '';
@@ -212,11 +221,8 @@ const settingsManager = (() => {
             useThemeColorsInChatCheckbox.checked = agentConfig.useThemeColorsInChat || false;
         }
 
-        // Restore collapse states
-        restoreCollapseStates(agentConfig);
-
         // Populate bilingual TTS settings
-        populateTtsModels(agentConfig.ttsVoicePrimary, agentConfig.ttsVoiceSecondary);
+        await populateTtsModels(agentConfig.ttsVoicePrimary, agentConfig.ttsVoiceSecondary);
 
         agentTtsRegexPrimaryInput.value = agentConfig.ttsRegexPrimary || '';
         agentTtsRegexSecondaryInput.value = agentConfig.ttsRegexSecondary || '';
@@ -227,6 +233,11 @@ const settingsManager = (() => {
         // Load and render regex rules
         currentAgentRegexes = JSON.parse(JSON.stringify(agentConfig.stripRegexes || [])); // Deep copy
         renderRegexList();
+
+        // Restore collapse states after dynamic content is ready
+        restoreCollapseStates(agentConfig);
+        updateAllSectionSummaries();
+        scheduleStickyButtonsRefresh();
     }
 
     /**
@@ -441,44 +452,102 @@ const settingsManager = (() => {
     async function populateTtsModels(currentPrimaryVoice, currentSecondaryVoice) {
         if (!agentTtsVoicePrimarySelect || !agentTtsVoiceSecondarySelect) return;
 
-        try {
-            const models = await electronAPI.sovitsGetModels();
+        const globalSettings = window.globalSettings || {};
+        const isNetworkMode = globalSettings.voiceMode === 'network';
 
+        try {
             // Clear existing options
             agentTtsVoicePrimarySelect.innerHTML = '<option value="">不使用语音</option>';
             agentTtsVoiceSecondarySelect.innerHTML = '<option value="">不使用</option>';
 
-            if (models && Object.keys(models).length > 0) {
-                for (const modelName in models) {
-                    // Create options for primary dropdown
+            let optionList = [];
+
+            if (isNetworkMode && electronAPI.loadWebindexModels) {
+                const webindexPayload = await electronAPI.loadWebindexModels();
+
+                if (Array.isArray(webindexPayload?.mergedVoiceOptions) && webindexPayload.mergedVoiceOptions.length) {
+                    optionList = webindexPayload.mergedVoiceOptions;
+                } else if (Array.isArray(webindexPayload?.models) && webindexPayload.models.length) {
+                    const firstItem = webindexPayload.models[0];
+                    if (firstItem && Array.isArray(firstItem?.mergedVoiceOptions)) {
+                        optionList = webindexPayload.models.flatMap(model => Array.isArray(model?.mergedVoiceOptions) ? model.mergedVoiceOptions : []);
+                    } else {
+                        optionList = webindexPayload.models;
+                    }
+                } else {
+                    const defaults = Array.isArray(webindexPayload?.defaults) ? webindexPayload.defaults : [];
+                    const remoteVoices = Array.isArray(webindexPayload?.remoteVoices) ? webindexPayload.remoteVoices : [];
+                    optionList = [...defaults, ...remoteVoices];
+                }
+            } else {
+                const localModels = await electronAPI.sovitsGetModels();
+                if (Array.isArray(localModels)) {
+                    optionList = localModels;
+                } else {
+                    optionList = localModels && typeof localModels === 'object'
+                        ? Object.keys(localModels).map(modelName => ({
+                            id: modelName,
+                            voice: modelName,
+                            displayName: modelName,
+                            type: 'local'
+                        }))
+                        : [];
+                }
+            }
+
+            const seenVoices = new Set();
+            optionList = optionList
+                .map(item => ({
+                    ...item,
+                    id: item?.id || item?.voice || item?.uri,
+                    voice: item?.voice || item?.uri || item?.id,
+                    displayName: item?.displayName || item?.customName || item?.name || item?.voice || item?.uri || item?.id
+                }))
+                .filter(item => {
+                    const optionValue = item.voice || item.id;
+                    if (!optionValue || seenVoices.has(optionValue)) {
+                        return false;
+                    }
+                    seenVoices.add(optionValue);
+                    return true;
+                });
+
+            if (optionList.length > 0) {
+                optionList.forEach(item => {
+                    const optionValue = item.voice || item.id;
+                    const optionLabel = item.displayName || item.voice || item.id;
+
                     const primaryOption = document.createElement('option');
-                    primaryOption.value = modelName;
-                    primaryOption.textContent = modelName;
-                    if (modelName === currentPrimaryVoice) {
+                    primaryOption.value = optionValue;
+                    primaryOption.textContent = optionLabel;
+                    if (optionValue === currentPrimaryVoice) {
                         primaryOption.selected = true;
                     }
                     agentTtsVoicePrimarySelect.appendChild(primaryOption);
 
-                    // Create options for secondary dropdown
                     const secondaryOption = document.createElement('option');
-                    secondaryOption.value = modelName;
-                    secondaryOption.textContent = modelName;
-                    if (modelName === currentSecondaryVoice) {
+                    secondaryOption.value = optionValue;
+                    secondaryOption.textContent = optionLabel;
+                    if (optionValue === currentSecondaryVoice) {
                         secondaryOption.selected = true;
                     }
                     agentTtsVoiceSecondarySelect.appendChild(secondaryOption);
-                }
+                });
             } else {
-                const disabledOption = '<option value="" disabled>未找到模型,请启动Sovits</option>';
+                const disabledOption = isNetworkMode
+                    ? '<option value="" disabled>未找到网络音色，请先获取列表并刷新 webindexmodel.json</option>'
+                    : '<option value="" disabled>未找到模型,请启动Sovits</option>';
                 agentTtsVoicePrimarySelect.innerHTML += disabledOption;
                 agentTtsVoiceSecondarySelect.innerHTML += disabledOption;
             }
         } catch (error) {
-            console.error('Failed to get Sovits TTS models:', error);
-            const errorOption = '<option value="" disabled>获取模型失败</option>';
+            console.error('Failed to get TTS models:', error);
+            const errorOption = isNetworkMode
+                ? '<option value="" disabled>获取网络音色失败</option>'
+                : '<option value="" disabled>获取模型失败</option>';
             agentTtsVoicePrimarySelect.innerHTML = errorOption;
             agentTtsVoiceSecondarySelect.innerHTML = errorOption;
-            uiHelper.showToastNotification('获取Sovits语音模型失败', 'error');
+            uiHelper.showToastNotification(isNetworkMode ? '获取网络音色失败' : '获取Sovits语音模型失败', 'error');
         }
     }
 
@@ -736,12 +805,16 @@ const settingsManager = (() => {
                 electronAPI.onModelsUpdated(async (models) => {
                     console.log('[SettingsManager] Received models-updated event. Repopulating list.');
                     let hotModelIds = [];
+                    let favoriteModelIds = [];
                     try {
                         if (electronAPI.getHotModels) {
                             hotModelIds = await electronAPI.getHotModels();
                         }
+                        if (electronAPI.getFavoriteModels) {
+                            favoriteModelIds = await electronAPI.getFavoriteModels();
+                        }
                     } catch (e) { /* ignore */ }
-                    populateModelList(models, currentModelSelectCallback, hotModelIds);
+                    populateModelList(models, currentModelSelectCallback, hotModelIds, favoriteModelIds);
                     uiHelper.showToastNotification('模型列表已刷新', 'success');
                 });
             }
@@ -754,13 +827,16 @@ const settingsManager = (() => {
 
             if (refreshTtsModelsBtn) {
                 refreshTtsModelsBtn.addEventListener('click', async () => {
-                    uiHelper.showToastNotification('正在刷新语音模型...', 'info');
+                    const isNetworkMode = (window.globalSettings || {}).voiceMode === 'network';
+                    uiHelper.showToastNotification(isNetworkMode ? '正在刷新网络音色列表...' : '正在刷新语音模型...', 'info');
                     try {
-                        await electronAPI.sovitsGetModels(true); // force refresh
-                        await populateTtsModels(agentTtsVoicePrimarySelect.value, agentTtsVoiceSecondarySelect.value); // repopulate
-                        uiHelper.showToastNotification('语音模型列表已刷新', 'success');
+                        if (electronAPI.sovitsGetModels) {
+                            await electronAPI.sovitsGetModels(true);
+                        }
+                        await populateTtsModels(agentTtsVoicePrimarySelect.value, agentTtsVoiceSecondarySelect.value);
+                        uiHelper.showToastNotification(isNetworkMode ? '网络音色列表已刷新' : '语音模型列表已刷新', 'success');
                     } catch (e) {
-                        uiHelper.showToastNotification('刷新语音模型失败', 'error');
+                        uiHelper.showToastNotification(isNetworkMode ? '刷新网络音色失败' : '刷新语音模型失败', 'error');
                     }
                 });
             }
@@ -777,11 +853,8 @@ const settingsManager = (() => {
             // Setup color picker synchronization
             setupColorPickerSync();
 
-            // Setup params collapsible
-            setupParamsCollapsible();
-
-            // Setup TTS collapsible
-            setupTtsCollapsible();
+            // Setup unified collapsible sections
+            setupAgentSettingsSections();
 
             // Setup style collapsible
             setupStyleCollapsible();
@@ -807,6 +880,17 @@ const settingsManager = (() => {
                 vcpServerUrlInput.addEventListener('blur', () => {
                     const completedUrl = completeVcpUrl(vcpServerUrlInput.value);
                     vcpServerUrlInput.value = completedUrl;
+                });
+            }
+        },
+        prewarmPromptManager: async () => {
+            const systemPromptContainer = document.getElementById('systemPromptContainer');
+            if (systemPromptContainer && window.PromptManager && !promptManager) {
+                console.log('[SettingsManager] Pre-warming PromptManager...');
+                promptManager = new window.PromptManager();
+                await promptManager.init({
+                    containerElement: systemPromptContainer,
+                    electronAPI: electronAPI
                 });
             }
         },
@@ -982,8 +1066,11 @@ const settingsManager = (() => {
             currentModelSelectCallback = (modelId) => {
                 if (targetInputElement) {
                     targetInputElement.value = modelId;
+                    targetInputElement.dispatchEvent(new Event('input', { bubbles: true }));
+                    targetInputElement.dispatchEvent(new Event('change', { bubbles: true }));
                 }
                 uiHelper.closeModal('modelSelectModal');
+                updateSectionSummary('model');
             };
             uiHelper.openModal('modelSelectModal');
             // 确保在模态框打开后（DOM 元素已从模板实例化）再填充列表
@@ -1011,12 +1098,33 @@ const settingsManager = (() => {
         }
         modelList.innerHTML = ''; // Clear existing list
 
-        if (!models || models.length === 0) {
+        const isSingleModelObject = models
+            && typeof models === 'object'
+            && !Array.isArray(models)
+            && typeof models.id === 'string';
+
+        const normalizedModels = Array.isArray(models)
+            ? models
+            : Array.isArray(models?.data)
+                ? models.data
+                : Array.isArray(models?.models)
+                    ? models.models
+                    : isSingleModelObject
+                        ? [models]
+                        : [];
+        const normalizedHotModelIds = Array.isArray(hotModelIds) ? hotModelIds : [];
+        const normalizedFavoriteModelIds = Array.isArray(favoriteModelIds) ? favoriteModelIds : [];
+
+        if (!Array.isArray(models) && !isSingleModelObject && !Array.isArray(models?.data) && !Array.isArray(models?.models)) {
+            console.warn('[SettingsManager] populateModelList received unsupported models payload:', models);
+        }
+
+        if (normalizedModels.length === 0) {
             modelList.innerHTML = '<li>没有可用的模型。请检查您的 VCP 服务器 URL 或刷新列表。</li>';
             return;
         }
 
-        const favSet = new Set(favoriteModelIds);
+        const favSet = new Set(normalizedFavoriteModelIds);
 
         // 创建模型列表项的辅助函数
         function createModelLi(model, isHot, isFavoriteSection) {
@@ -1071,10 +1179,10 @@ const settingsManager = (() => {
         }
 
         // 🔥 热门模型分区
-        if (hotModelIds.length > 0) {
+        if (normalizedHotModelIds.length > 0) {
             // 按热门列表顺序筛选出存在于当前模型列表中的热门模型
-            const hotModels = hotModelIds
-                .map(id => models.find(m => m.id === id))
+            const hotModels = normalizedHotModelIds
+                .map(id => normalizedModels.find(m => m.id === id))
                 .filter(Boolean);
 
             if (hotModels.length > 0) {
@@ -1090,9 +1198,9 @@ const settingsManager = (() => {
         }
 
         // ⭐ 收藏模型分区
-        if (favoriteModelIds.length > 0) {
-            const favoriteModels = favoriteModelIds
-                .map(id => models.find(m => m.id === id))
+        if (normalizedFavoriteModelIds.length > 0) {
+            const favoriteModels = normalizedFavoriteModelIds
+                .map(id => normalizedModels.find(m => m.id === id))
                 .filter(Boolean);
 
             if (favoriteModels.length > 0) {
@@ -1108,13 +1216,13 @@ const settingsManager = (() => {
         }
 
         // 📋 全部模型分区
-        if (models.length > 0) {
+        if (normalizedModels.length > 0) {
             const allTitle = document.createElement('li');
             allTitle.className = 'model-section-title';
             allTitle.textContent = '📋 全部模型';
             modelList.appendChild(allTitle);
 
-            models.forEach(model => {
+            normalizedModels.forEach(model => {
                 modelList.appendChild(createModelLi(model, false, false));
             });
         }
@@ -1153,10 +1261,41 @@ const settingsManager = (() => {
     /**
      * Handles the refresh models button click.
      */
-    function handleRefreshModels() {
-        if (electronAPI.refreshModels) {
-            electronAPI.refreshModels();
-            uiHelper.showToastNotification('正在刷新模型列表...', 'info');
+    async function handleRefreshModels() {
+        if (!electronAPI.refreshModels) {
+            uiHelper.showToastNotification('当前环境不支持刷新模型列表', 'error');
+            return;
+        }
+
+        uiHelper.showToastNotification('正在刷新模型列表...', 'info');
+
+        try {
+            const result = await electronAPI.refreshModels();
+            const models = Array.isArray(result?.models) ? result.models : await electronAPI.getCachedModels();
+
+            let hotModelIds = [];
+            let favoriteModelIds = [];
+            try {
+                if (electronAPI.getHotModels) {
+                    hotModelIds = await electronAPI.getHotModels();
+                }
+                if (electronAPI.getFavoriteModels) {
+                    favoriteModelIds = await electronAPI.getFavoriteModels();
+                }
+            } catch (e) {
+                console.warn('[SettingsManager] Failed to refresh model metadata:', e);
+            }
+
+            populateModelList(models, currentModelSelectCallback, hotModelIds, favoriteModelIds);
+
+            if (Array.isArray(models) && models.length > 0) {
+                uiHelper.showToastNotification(`模型列表已刷新，共 ${models.length} 个模型`, 'success');
+            } else {
+                uiHelper.showToastNotification('模型列表刷新完成，但服务器未返回可用模型', 'warning');
+            }
+        } catch (error) {
+            console.error('[SettingsManager] Failed to refresh models:', error);
+            uiHelper.showToastNotification(`刷新模型列表失败: ${error.message || error}`, 'error');
         }
     }
 
@@ -1165,58 +1304,81 @@ const settingsManager = (() => {
      */
     // --- Regex Settings V2 ---
 
-    function createStripRegexUI() {
-        // 查找语音设置的折叠容器
-        const ttsCollapsibleContainer = document.querySelector('.agent-params-collapsible-container:has(#ttsToggleHeader)');
-        if (!ttsCollapsibleContainer) {
+function createStripRegexUI() {
+        const ttsCollapsibleContainer = getSectionContainer('tts');
+        if (!ttsCollapsibleContainer || !ttsCollapsibleContainer.parentNode) {
             console.warn('[SettingsManager] TTS collapsible container not found for regex UI insertion');
             return;
         }
 
-        const divider = document.createElement('hr');
-        divider.className = 'form-divider';
+        const existingContainer = getSectionContainer('regex');
+        if (existingContainer) {
+            stripRegexListContainer = existingContainer.querySelector('#stripRegexListContainer');
+            return;
+        }
 
-        const container = document.createElement('div');
-        container.className = 'form-group strip-regex-container';
+        const section = document.createElement('div');
+        section.className = 'agent-settings-collapsible-container agent-settings-section strip-regex-container collapsed';
+        section.dataset.sectionKey = 'regex';
 
-        const title = document.createElement('div');
-        title.className = 'form-section-title';
+        const header = document.createElement('div');
+        header.className = 'agent-settings-section-header';
+        header.id = 'regexToggleHeader';
+
+        const title = document.createElement('span');
+        title.className = 'agent-settings-section-title';
         title.textContent = '正则设置';
-        container.appendChild(title);
+        header.appendChild(title);
+
+        const summary = document.createElement('div');
+        summary.className = 'agent-settings-section-summary';
+        summary.id = 'regexSummary';
+        header.appendChild(summary);
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'agent-settings-toggle-btn';
+        toggleBtn.id = 'regexToggleBtn';
+        toggleBtn.setAttribute('aria-label', '展开或收起正则设置');
+        toggleBtn.innerHTML = `
+            <svg class="toggle-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+        `;
+        header.appendChild(toggleBtn);
+
+        const content = document.createElement('div');
+        content.className = 'agent-settings-section-content';
+        content.id = 'regexContent';
+
+        const shell = document.createElement('div');
+        shell.className = 'agent-settings-card-shell';
 
         stripRegexListContainer = document.createElement('div');
         stripRegexListContainer.id = 'stripRegexListContainer';
         stripRegexListContainer.className = 'strip-regex-list-container';
-        container.appendChild(stripRegexListContainer);
+        shell.appendChild(stripRegexListContainer);
 
-        // 添加正则按钮
         const addBtn = document.createElement('button');
         addBtn.type = 'button';
         addBtn.textContent = '添加正则';
         addBtn.className = 'btn-add-regex';
         addBtn.addEventListener('click', () => openRegexModal());
-        container.appendChild(addBtn);
+        shell.appendChild(addBtn);
 
-        // 导入正则按钮（放在添加正则按钮下方）
         const importBtn = document.createElement('button');
         importBtn.type = 'button';
         importBtn.textContent = '导入正则';
-        importBtn.className = 'btn-add-regex';
-        importBtn.style.marginTop = '8px';
+        importBtn.className = 'btn-add-regex btn-add-regex-secondary';
         importBtn.addEventListener('click', () => handleImportRegex());
-        container.appendChild(importBtn);
+        shell.appendChild(importBtn);
 
-        // 在导入正则按钮后添加分隔线
-        const bottomDivider = document.createElement('hr');
-        bottomDivider.className = 'form-divider';
-        bottomDivider.style.marginTop = '15px';
-        bottomDivider.style.marginBottom = '15px';
-        container.appendChild(bottomDivider);
+        content.appendChild(shell);
+        section.appendChild(header);
+        section.appendChild(content);
 
-        // 在语音设置折叠容器之后插入正则设置
-        const parent = ttsCollapsibleContainer.parentNode;
-        parent.insertBefore(divider, ttsCollapsibleContainer.nextSibling);
-        parent.insertBefore(container, divider.nextSibling);
+        ttsCollapsibleContainer.parentNode.insertBefore(section, ttsCollapsibleContainer.nextSibling);
 
         console.log('[SettingsManager] Regex UI created after TTS collapsible container');
     }
@@ -1228,6 +1390,8 @@ const settingsManager = (() => {
             const row = createRegexRow(rule);
             stripRegexListContainer.appendChild(row);
         });
+        updateSectionSummary('regex');
+        scheduleStickyButtonsRefresh();
     }
 
     function createRegexRow(rule) {
@@ -1406,55 +1570,61 @@ const settingsManager = (() => {
     /**
      * 设置Agent设置的粘性按钮效果
      */
+    /**
+     * 设置设置页面的粘性按钮效果（通用逻辑，支持 Agent 和群组）
+     */
     function setupAgentSettingsStickyButtons() {
-        if (!agentSettingsContainer) return;
+        const settingsTab = document.getElementById('tabContentSettings');
+        if (!settingsTab) return;
 
-        // 监听Agent设置容器的滚动事件
-        const settingsTabContent = agentSettingsContainer.closest('.sidebar-tab-content');
-        if (!settingsTabContent) return;
+        let isCurrentlyAtBottom = false;
 
-        let isScrolledToBottom = false;
+        const updateButtonsState = () => {
+            const allFormActions = settingsTab.querySelectorAll('.form-actions');
+            if (allFormActions.length === 0) return;
 
-        const updateStickyButtonState = () => {
-            const scrollTop = settingsTabContent.scrollTop;
-            const scrollHeight = settingsTabContent.scrollHeight;
-            const clientHeight = settingsTabContent.clientHeight;
+            // 检测是否到达底部（引入滞后性/Hysteresis逻辑以消除抖动）
+            const distanceToBottom = settingsTab.scrollHeight - settingsTab.scrollTop - settingsTab.clientHeight;
+            
+            // 判定逻辑：
+            // 1. 如果当前未显示（isCurrentlyAtBottom = false），则在距离底部 < 10px 时触发显示
+            // 2. 如果当前已显示（isCurrentlyAtBottom = true），则只有在向上滚动超过 60px 时才隐藏
+            //    (60px 略大于增加的按钮区域高度，防止高度变化导致的判定循环)
+            const threshold = isCurrentlyAtBottom ? 60 : 10;
+            const isAtBottom = distanceToBottom <= threshold;
 
-            // 检查是否滚动到底部（留出一些容差）
-            const newScrolledToBottom = scrollTop + clientHeight >= scrollHeight - 10;
-
-            if (newScrolledToBottom !== isScrolledToBottom) {
-                isScrolledToBottom = newScrolledToBottom;
-
-                // 更新按钮容器类名
-                const formActions = agentSettingsForm?.querySelector('.form-actions');
-                if (formActions) {
-                    if (isScrolledToBottom) {
-                        // 滚动到底部时，显示删除按钮
+            if (isAtBottom !== isCurrentlyAtBottom) {
+                isCurrentlyAtBottom = isAtBottom;
+                allFormActions.forEach(formActions => {
+                    if (isAtBottom) {
                         formActions.classList.add('scrolled-to-bottom');
                     } else {
-                        // 未滚动到底部时，隐藏删除按钮
                         formActions.classList.remove('scrolled-to-bottom');
                     }
-                }
+                });
             }
         };
 
-        // 使用节流函数避免过度调用
-        let scrollTimeout;
-        settingsTabContent.addEventListener('scroll', () => {
-            if (scrollTimeout) {
-                clearTimeout(scrollTimeout);
-            }
-            scrollTimeout = setTimeout(updateStickyButtonState, 10);
-        });
 
-        // 初始检查 - 确保初始状态下删除按钮是隐藏的
-        isScrolledToBottom = false;
-        updateStickyButtonState();
 
-        console.log('[SettingsManager] Agent settings sticky buttons initialized.');
+        // 监听滚动事件
+        settingsTab.addEventListener('scroll', updateButtonsState);
+
+        // 暴露刷新方法给外部调用
+        scheduleStickyButtonsRefresh = () => {
+            window.requestAnimationFrame(updateButtonsState);
+        };
+
+        // 初始检查
+        setTimeout(updateButtonsState, 100);
+
+        // 定期检查（处理动态内容加载导致的滚动条变化）
+        setInterval(updateButtonsState, 1000);
+
+        console.log('[SettingsManager] Settings sticky buttons initialized with generic scroll detection.');
     }
+
+
 
     /**
      * 设置颜色选择器与文本输入框的同步
@@ -1521,198 +1691,355 @@ const settingsManager = (() => {
     /**
      * 设置参数容器的折叠功能
      */
-    function setupParamsCollapsible() {
-        const paramsContainer = document.querySelector('.agent-params-collapsible-container');
-        const paramsHeader = document.getElementById('paramsToggleHeader');
-        const paramsToggleBtn = document.getElementById('paramsToggleBtn');
-        const paramsSummary = document.getElementById('paramsSummary');
-        const paramsContent = document.getElementById('paramsContent');
-
-        if (!paramsContainer || !paramsHeader || !paramsToggleBtn || !paramsSummary) {
-            console.warn('[SettingsManager] Params collapsible elements not found');
-            return;
-        }
-
-        // 默认展开
-        let isCollapsed = false;
-
-        // 更新摘要显示
-        const updateSummary = () => {
-            if (!isCollapsed) {
-                paramsSummary.textContent = '';
-                return;
-            }
-
-            const temperature = agentTemperatureInput.value || '0.7';
-            const contextLimit = agentContextTokenLimitInput.value || '4000';
-            const maxOutput = agentMaxOutputTokensInput.value || '1000';
-            const topP = agentTopPInput.value || '未设置';
-            const topK = agentTopKInput.value || '未设置';
-            const streamOutput = document.getElementById('agentStreamOutputTrue').checked ? '流式' : '非流式';
-
-            paramsSummary.textContent = `Temperature: ${temperature} | 上下文: ${contextLimit} | 最大输出: ${maxOutput} | Top P: ${topP} | Top K: ${topK} | 输出: ${streamOutput}`;
-        };
-
-        // 切换折叠状态
-        const toggleCollapse = () => {
-            isCollapsed = !isCollapsed;
-            paramsContainer.classList.toggle('collapsed', isCollapsed);
-            updateSummary();
-        };
-
-        // 点击头部切换
-        paramsHeader.addEventListener('click', toggleCollapse);
-
-        // 监听输入变化以更新摘要
-        const inputs = [
-            agentTemperatureInput,
-            agentContextTokenLimitInput,
-            agentMaxOutputTokensInput,
-            agentTopPInput,
-            agentTopKInput,
-            document.getElementById('agentStreamOutputTrue'),
-            document.getElementById('agentStreamOutputFalse')
-        ];
-
-        inputs.forEach(input => {
-            if (input) {
-                input.addEventListener('change', () => {
-                    if (isCollapsed) {
-                        updateSummary();
-                    }
-                });
-            }
-        });
-
-        console.log('[SettingsManager] Params collapsible setup complete.');
+function setupParamsCollapsible() {
+        setupAgentSettingsSections();
     }
 
     /**
      * 设置语音设置容器的折叠功能
      */
     function setupTtsCollapsible() {
-        const ttsContainer = document.querySelector('.agent-params-collapsible-container:has(#ttsToggleHeader)');
-        const ttsHeader = document.getElementById('ttsToggleHeader');
-        const ttsToggleBtn = document.getElementById('ttsToggleBtn');
-        const ttsSummary = document.getElementById('ttsSummary');
-        const ttsContent = document.getElementById('ttsContent');
-
-        if (!ttsContainer || !ttsHeader || !ttsToggleBtn || !ttsSummary) {
-            console.warn('[SettingsManager] TTS collapsible elements not found');
-            return;
-        }
-
-        // 默认展开
-        let isTtsCollapsed = false;
-
-        // 更新摘要显示
-        const updateTtsSummary = () => {
-            if (!isTtsCollapsed) {
-                ttsSummary.textContent = '';
-                return;
-            }
-
-            const primaryVoice = agentTtsVoicePrimarySelect.value || '不使用语音';
-            const primaryRegex = agentTtsRegexPrimaryInput.value || '全部';
-            const secondaryVoice = agentTtsVoiceSecondarySelect.value || '不使用';
-            const secondaryRegex = agentTtsRegexSecondaryInput.value || '无';
-            const speed = agentTtsSpeedSlider.value || '1.0';
-
-            ttsSummary.textContent = `主语言: ${primaryVoice} (${primaryRegex}) | 副语言: ${secondaryVoice} (${secondaryRegex}) | 语速: ${speed}`;
-        };
-
-        // 切换折叠状态
-        const toggleTtsCollapse = () => {
-            isTtsCollapsed = !isTtsCollapsed;
-            ttsContainer.classList.toggle('collapsed', isTtsCollapsed);
-            updateTtsSummary();
-        };
-
-        // 点击头部切换
-        ttsHeader.addEventListener('click', toggleTtsCollapse);
-
-        // 监听输入变化以更新摘要
-        const ttsInputs = [
-            agentTtsVoicePrimarySelect,
-            agentTtsRegexPrimaryInput,
-            agentTtsVoiceSecondarySelect,
-            agentTtsRegexSecondaryInput,
-            agentTtsSpeedSlider
-        ];
-
-        ttsInputs.forEach(input => {
-            if (input) {
-                const eventType = input.tagName === 'SELECT' ? 'change' : 'input';
-                input.addEventListener(eventType, () => {
-                    if (isTtsCollapsed) {
-                        updateTtsSummary();
-                    }
-                });
-            }
-        });
-
-        console.log('[SettingsManager] TTS collapsible setup complete.');
+        setupAgentSettingsSections();
     }
 
     /**
      * 获取当前所有折叠区域的状态
      */
     function getCurrentCollapseStates() {
-        const paramsContainer = document.querySelector('.agent-params-collapsible-container:has(#paramsToggleHeader)');
-        const ttsContainer = document.querySelector('.agent-params-collapsible-container:has(#ttsToggleHeader)');
-
         return {
-            paramsCollapsed: paramsContainer ? paramsContainer.classList.contains('collapsed') : false,
-            ttsCollapsed: ttsContainer ? ttsContainer.classList.contains('collapsed') : false
+            identityCollapsed: getSectionContainer('identity')?.classList.contains('collapsed') ?? true,
+            promptCollapsed: getSectionContainer('prompt')?.classList.contains('collapsed') ?? true,
+            modelCollapsed: getSectionContainer('model')?.classList.contains('collapsed') ?? true,
+            paramsCollapsed: getSectionContainer('params')?.classList.contains('collapsed') ?? true,
+            ttsCollapsed: getSectionContainer('tts')?.classList.contains('collapsed') ?? true,
+            regexCollapsed: getSectionContainer('regex')?.classList.contains('collapsed') ?? true,
+            styleCollapsed: document.querySelector('.agent-style-collapsible-container')?.classList.contains('collapsed') ?? true
         };
+    }
+
+    function getSectionContainer(key) {
+        return agentSettingsForm?.querySelector(`.agent-settings-section[data-section-key="${key}"]`) || null;
+    }
+
+    function createSectionController(key, buildSummary) {
+        const container = getSectionContainer(key);
+        if (!container) {
+            return null;
+        }
+
+        const header = container.querySelector('.agent-settings-section-header');
+        const summary = container.querySelector('.agent-settings-section-summary');
+        const toggleBtn = container.querySelector('.agent-settings-toggle-btn');
+        if (!header || !summary || !toggleBtn) {
+            console.warn(`[SettingsManager] Missing collapsible controls for section "${key}"`);
+            return null;
+        }
+
+        const controller = {
+            key,
+            container,
+            header,
+            summary,
+            toggleBtn,
+            buildSummary,
+            setCollapsed(collapsed) {
+                this.container.classList.toggle('collapsed', !!collapsed);
+            }
+        };
+
+        if (!header.dataset.collapsibleBound) {
+            header.addEventListener('click', (event) => {
+                event.preventDefault();
+                controller.setCollapsed(!controller.container.classList.contains('collapsed'));
+                updateSectionSummary(key);
+                persistCollapseStatesForCurrentSelection();
+                scheduleStickyButtonsRefresh();
+            });
+            header.dataset.collapsibleBound = 'true';
+        }
+
+        sectionControllers.set(key, controller);
+        return controller;
+    }
+
+    function buildIdentitySummary() {
+        const name = agentNameInput?.value?.trim() || '未命名 Agent';
+        const avatarSrc = agentAvatarPreview?.getAttribute('src') || 'assets/default_avatar.png';
+        return {
+            kind: 'identity',
+            text: name,
+            avatarSrc: avatarSrc || 'assets/default_avatar.png'
+        };
+    }
+
+    async function buildPromptSummary() {
+        const mode = promptManager?.getMode?.() || 'original';
+        const modeLabel = promptManager?.getModeName?.(mode) || promptModeFallbackLabels[mode] || mode;
+        let promptContent = '';
+
+        try {
+            promptContent = promptManager?.getCurrentSystemPrompt
+                ? await promptManager.getCurrentSystemPrompt()
+                : '';
+        } catch (error) {
+            console.warn('[SettingsManager] Failed to build prompt summary from PromptManager:', error);
+        }
+
+        if (!promptContent) {
+            const promptTextarea = document.querySelector('#systemPromptContainer textarea');
+            promptContent = promptTextarea?.value?.trim() || '';
+        }
+
+        return buildPromptSummaryText(`模式: ${modeLabel}`, promptContent);
+    }
+
+    function buildPromptSummaryText(modeLine, promptContent) {
+        const normalizedPrompt = (promptContent || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!normalizedPrompt) {
+            return `${modeLine}\n暂无提示词内容`;
+        }
+
+        const preview = normalizedPrompt.length > 96
+            ? `${normalizedPrompt.slice(0, 96)}...`
+            : normalizedPrompt;
+
+        return `${modeLine}\n${preview}`;
+    }
+
+    function buildModelSummary() {
+        return agentModelInput?.value?.trim() || '未选择模型';
+    }
+
+    function buildParamsSummary() {
+        const temperature = agentTemperatureInput?.value || '0.7';
+        const contextLimit = agentContextTokenLimitInput?.value || '4000';
+        const maxOutput = agentMaxOutputTokensInput?.value || '1000';
+        const topP = agentTopPInput?.value || '未设置';
+        const topK = agentTopKInput?.value || '未设置';
+        const streamOutput = document.getElementById('agentStreamOutputTrue')?.checked ? '流式' : '非流式';
+
+        return [
+            `Temperature: ${temperature}`,
+            `上下文: ${contextLimit}`,
+            `最大输出: ${maxOutput}`,
+            `Top P: ${topP}`,
+            `Top K: ${topK}`,
+            `输出: ${streamOutput}`
+        ].join('\n');
+    }
+
+    function buildTtsSummary() {
+        const primaryVoice = agentTtsVoicePrimarySelect?.selectedOptions?.[0]?.textContent?.trim()
+            || agentTtsVoicePrimarySelect?.value
+            || '不使用语音';
+        const primaryRegex = agentTtsRegexPrimaryInput?.value?.trim() || '全部';
+        const secondaryVoice = agentTtsVoiceSecondarySelect?.selectedOptions?.[0]?.textContent?.trim()
+            || agentTtsVoiceSecondarySelect?.value
+            || '不使用';
+        const secondaryRegex = agentTtsRegexSecondaryInput?.value?.trim() || '无';
+        const speed = agentTtsSpeedSlider?.value || '1.0';
+
+        return [
+            `主语言: ${primaryVoice}`,
+            `主语言正则: ${primaryRegex}`,
+            `副语言: ${secondaryVoice}`,
+            `副语言正则: ${secondaryRegex}`,
+            `语速: ${speed}`
+        ].join('\n');
+    }
+
+    function buildRegexSummary() {
+        const count = Array.isArray(currentAgentRegexes) ? currentAgentRegexes.length : 0;
+        return count > 0 ? `${count} 条规则` : '暂无规则';
+    }
+
+    function setupAgentSettingsSections() {
+        sectionControllers.clear();
+
+        createSectionController('identity', buildIdentitySummary);
+        createSectionController('prompt', buildPromptSummary);
+        createSectionController('model', buildModelSummary);
+        createSectionController('params', buildParamsSummary);
+        createSectionController('tts', buildTtsSummary);
+        createSectionController('regex', buildRegexSummary);
+
+        if (!agentSettingsForm?.dataset.sectionSummaryBindings) {
+            const bindSummaryRefresh = (element, events = ['input']) => {
+                if (!element || element.dataset.summaryRefreshBound) return;
+                events.forEach(eventName => {
+                    element.addEventListener(eventName, () => updateAllSectionSummaries());
+                });
+                element.dataset.summaryRefreshBound = 'true';
+            };
+
+            [
+                agentNameInput,
+                agentTemperatureInput,
+                agentContextTokenLimitInput,
+                agentMaxOutputTokensInput,
+                agentTopPInput,
+                agentTopKInput,
+                agentTtsRegexPrimaryInput,
+                agentTtsRegexSecondaryInput,
+                agentTtsSpeedSlider,
+                agentModelInput,
+                document.getElementById('agentStreamOutputTrue'),
+                document.getElementById('agentStreamOutputFalse'),
+                agentTtsVoicePrimarySelect,
+                agentTtsVoiceSecondarySelect
+            ].forEach(element => bindSummaryRefresh(element, ['input', 'change']));
+
+            const systemPromptContainer = document.getElementById('systemPromptContainer');
+            if (systemPromptContainer && !systemPromptContainer.dataset.summaryRefreshBound) {
+                const schedulePromptRefresh = () => {
+                    window.setTimeout(() => updateSectionSummary('prompt'), 0);
+                    scheduleStickyButtonsRefresh();
+                };
+                ['input', 'change', 'click'].forEach(eventName => {
+                    systemPromptContainer.addEventListener(eventName, schedulePromptRefresh);
+                });
+                const promptObserver = new MutationObserver(() => schedulePromptRefresh());
+                promptObserver.observe(systemPromptContainer, {
+                    childList: true,
+                    subtree: true,
+                    characterData: true
+                });
+                systemPromptContainer.dataset.summaryRefreshBound = 'true';
+            }
+
+            if (agentAvatarPreview && !agentAvatarPreview.dataset.summaryObserverBound) {
+                const avatarObserver = new MutationObserver(() => updateSectionSummary('identity'));
+                avatarObserver.observe(agentAvatarPreview, { attributes: true, attributeFilter: ['src'] });
+                agentAvatarPreview.dataset.summaryObserverBound = 'true';
+            }
+
+            agentSettingsForm.dataset.sectionSummaryBindings = 'true';
+        }
+
+        updateAllSectionSummaries();
+    }
+
+    async function updateSectionSummary(key) {
+        const controller = sectionControllers.get(key);
+        if (!controller) return;
+
+        const summaryValue = await Promise.resolve(controller.buildSummary());
+
+        if (summaryValue && typeof summaryValue === 'object' && summaryValue.kind === 'identity') {
+            controller.summary.classList.add('summary-with-avatar');
+            controller.summary.innerHTML = '';
+
+            const avatar = document.createElement('img');
+            avatar.className = 'agent-settings-summary-avatar';
+            avatar.src = summaryValue.avatarSrc || 'assets/default_avatar.png';
+            avatar.alt = '';
+
+            const label = document.createElement('span');
+            label.className = 'agent-settings-summary-label';
+            label.textContent = summaryValue.text || '未命名 Agent';
+
+            controller.summary.appendChild(avatar);
+            controller.summary.appendChild(label);
+            return;
+        }
+
+        controller.summary.classList.remove('summary-with-avatar');
+        controller.summary.textContent = typeof summaryValue === 'string' ? summaryValue : '';
+    }
+
+    function updateAllSectionSummaries() {
+        sectionControllers.forEach((_, key) => {
+            updateSectionSummary(key);
+        });
+    }
+
+    function getCollapseStatesFromConfig(agentConfig) {
+        return agentConfig?.uiCollapseStates || {};
+    }
+
+    function syncCollapseStatesToCurrentSelection(collapseStates = getCurrentCollapseStates()) {
+        const currentSelectedItem = refs.currentSelectedItemRef?.get?.();
+        if (!currentSelectedItem || currentSelectedItem.type !== 'agent') {
+            return;
+        }
+
+        if (currentSelectedItem.config) {
+            currentSelectedItem.config.uiCollapseStates = { ...collapseStates };
+        } else {
+            currentSelectedItem.uiCollapseStates = { ...collapseStates };
+        }
+    }
+
+    async function persistCollapseStatesForCurrentSelection() {
+        const currentSelectedItem = refs.currentSelectedItemRef?.get?.();
+        const agentId = editingAgentIdInput?.value || currentSelectedItem?.id;
+        if (!agentId || !electronAPI?.updateAgentConfig) {
+            return;
+        }
+
+        const collapseStates = getCurrentCollapseStates();
+        const signature = `${agentId}:${JSON.stringify(collapseStates)}`;
+        if (signature === lastPersistedCollapseStateSignature) {
+            return;
+        }
+
+        syncCollapseStatesToCurrentSelection(collapseStates);
+        lastPersistedCollapseStateSignature = signature;
+
+        try {
+            await electronAPI.updateAgentConfig(agentId, { uiCollapseStates: collapseStates });
+        } catch (error) {
+            console.error('[SettingsManager] Failed to persist collapse states:', error);
+            lastPersistedCollapseStateSignature = '';
+        }
     }
 
     /**
      * 恢复折叠区域的状态
      */
     function restoreCollapseStates(agentConfig) {
-        if (!agentConfig.uiCollapseStates) return;
+        const agentId = editingAgentIdInput?.value || agentConfig?.id || '';
+        const isFirstSettingsLoadThisSession = agentId && !initializedCollapseStateAgents.has(agentId);
+        const states = {
+            identityCollapsed: true,
+            promptCollapsed: true,
+            modelCollapsed: true,
+            paramsCollapsed: true,
+            ttsCollapsed: true,
+            regexCollapsed: true,
+            styleCollapsed: true,
+            ...(isFirstSettingsLoadThisSession ? {} : getCollapseStatesFromConfig(agentConfig))
+        };
 
-        const states = agentConfig.uiCollapseStates;
-
-        // 恢复参数设置折叠状态
-        const paramsContainer = document.querySelector('.agent-params-collapsible-container:has(#paramsToggleHeader)');
-        if (paramsContainer && states.paramsCollapsed) {
-            paramsContainer.classList.add('collapsed');
-            // 触发摘要更新
-            const paramsSummary = document.getElementById('paramsSummary');
-            if (paramsSummary) {
-                setTimeout(() => {
-                    const temperature = agentTemperatureInput.value || '0.7';
-                    const contextLimit = agentContextTokenLimitInput.value || '4000';
-                    const maxOutput = agentMaxOutputTokensInput.value || '1000';
-                    const topP = agentTopPInput.value || '未设置';
-                    const topK = agentTopKInput.value || '未设置';
-                    const streamOutput = document.getElementById('agentStreamOutputTrue').checked ? '流式' : '非流式';
-
-                    paramsSummary.textContent = `Temperature: ${temperature} | 上下文: ${contextLimit} | 最大输出: ${maxOutput} | Top P: ${topP} | Top K: ${topK} | 输出: ${streamOutput}`;
-                }, 100);
-            }
+        if (agentId) {
+            initializedCollapseStateAgents.add(agentId);
         }
 
-        // 恢复语音设置折叠状态
-        const ttsContainer = document.querySelector('.agent-params-collapsible-container:has(#ttsToggleHeader)');
-        if (ttsContainer && states.ttsCollapsed) {
-            ttsContainer.classList.add('collapsed');
-            // 触发摘要更新
-            const ttsSummary = document.getElementById('ttsSummary');
-            if (ttsSummary) {
-                setTimeout(() => {
-                    const primaryVoice = agentTtsVoicePrimarySelect.value || '不使用语音';
-                    const primaryRegex = agentTtsRegexPrimaryInput.value || '全部';
-                    const secondaryVoice = agentTtsVoiceSecondarySelect.value || '不使用';
-                    const secondaryRegex = agentTtsRegexSecondaryInput.value || '无';
-                    const speed = agentTtsSpeedSlider.value || '1.0';
-
-                    ttsSummary.textContent = `主语言: ${primaryVoice} (${primaryRegex}) | 副语言: ${secondaryVoice} (${secondaryRegex}) | 语速: ${speed}`;
-                }, 100);
+        [
+            ['identity', states.identityCollapsed],
+            ['prompt', states.promptCollapsed],
+            ['model', states.modelCollapsed],
+            ['params', states.paramsCollapsed],
+            ['tts', states.ttsCollapsed],
+            ['regex', states.regexCollapsed]
+        ].forEach(([key, collapsed]) => {
+            const controller = sectionControllers.get(key);
+            if (controller) {
+                controller.setCollapsed(collapsed);
             }
+        });
+
+        const styleContainer = document.querySelector('.agent-style-collapsible-container');
+        if (styleContainer) {
+            styleContainer.classList.toggle('collapsed', !!states.styleCollapsed);
         }
+
+        syncCollapseStatesToCurrentSelection(states);
+        lastPersistedCollapseStateSignature = `${editingAgentIdInput?.value || agentConfig?.id || ''}:${JSON.stringify(states)}`;
+        updateAllSectionSummaries();
 
         console.log('[SettingsManager] Collapse states restored:', states);
     }
@@ -1729,10 +2056,14 @@ const settingsManager = (() => {
             return;
         }
 
-        // 点击头部切换折叠状态
-        styleHeader.addEventListener('click', () => {
-            styleContainer.classList.toggle('collapsed');
-        });
+        if (!styleHeader.dataset.collapsibleBound) {
+            styleHeader.addEventListener('click', () => {
+                styleContainer.classList.toggle('collapsed');
+                persistCollapseStatesForCurrentSelection();
+                scheduleStickyButtonsRefresh();
+            });
+            styleHeader.dataset.collapsibleBound = 'true';
+        }
 
         console.log('[SettingsManager] Style collapsible setup complete.');
     }
