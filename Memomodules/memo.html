@@ -134,8 +134,16 @@
                 <input type="date" id="new-memo-date" class="glass-input" style="width: 100%;">
             </div>
             <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-secondary);">文件夹</label>
-                <input type="text" id="new-memo-maid" class="glass-input" style="width: 100%;" placeholder="日记的目标文件夹">
+                <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-secondary);">署名 / 目标文件夹 <span style="opacity: 0.5; font-size: 0.8rem;">(maid)</span></label>
+                <input type="text" id="new-memo-maid" class="glass-input" style="width: 100%;" placeholder="如：Nova 或 [Nova的知识]Nova">
+            </div>
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-secondary);">文件名 <span style="opacity: 0.5; font-size: 0.8rem;">(可选，留空自动生成)</span></label>
+                <input type="text" id="new-memo-filename" class="glass-input" style="width: 100%;" placeholder="自定义文件名，如：莱恩日记提示词哲学">
+            </div>
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-secondary);">标签 <span style="opacity: 0.5; font-size: 0.8rem;">(必选，逗号分隔)</span></label>
+                <input type="text" id="new-memo-tags" class="glass-input" style="width: 100%;" placeholder="如：日记系统重构, RAG语义检索, 提示词工程">
             </div>
             <div style="margin-bottom: 20px;">
                 <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-secondary);">内容</label>
@@ -185,6 +193,25 @@
         </div>
     </div>
 
+    <!-- 工作台发布后旧日记处理弹窗 -->
+    <div id="post-publish-modal" class="modal" style="display: none; align-items: center; justify-content: center; position: fixed; top:0; left:0; right:0; bottom:0; z-index: 10200; background: rgba(0,0,0,0.6); backdrop-filter: blur(10px);">
+        <div class="modal-glass-content glass" style="max-width: 500px; width: 90%; text-align: center; padding: 30px; border-radius: 20px;">
+            <h3 style="margin-top: 0; margin-bottom: 10px; color: var(--accent-color);">✅ 整合日记发布成功</h3>
+            <p style="margin-bottom: 20px; line-height: 1.6; color: var(--text-secondary); font-size: 0.9rem;">如何处理已引用的 <strong id="post-publish-count">0</strong> 篇原始日记？</p>
+            <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 10px;">
+                <button id="post-publish-keep-btn" class="glass-btn" style="width: 100%; padding: 12px; justify-content: center; font-size: 0.95rem;">
+                    📌 保留原位 — 不做任何变动
+                </button>
+                <button id="post-publish-archive-btn" class="glass-btn primary" style="width: 100%; padding: 12px; justify-content: center; font-size: 0.95rem;">
+                    📦 归档到「已整理」文件夹
+                </button>
+                <button id="post-publish-delete-btn" class="glass-btn danger" style="width: 100%; padding: 12px; justify-content: center; font-size: 0.95rem;">
+                    🗑️ 删除原始日记（不可撤销）
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- 右键菜单 -->
     <div id="context-menu" class="context-menu glass" style="display: none; position: fixed; z-index: 5000; min-width: 120px; padding: 5px 0; border-radius: 10px; box-shadow: 0 10px 25px rgba(0,0,0,0.3);">
         <!-- 菜单项将由 JS 动态生成 -->
@@ -212,7 +239,12 @@
                     </h2>
                     <span id="workbench-count-tag" class="workbench-count-tag">共引用 0 篇日记</span>
                 </div>
-                <button id="close-workbench-btn" class="nav-icon-btn" style="font-size: 1.5rem;">&times;</button>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <button id="workbench-fullread-btn" class="glass-btn" style="padding: 6px 16px; font-size: 0.9rem;" title="在独立阅读窗口中查看所有引用日记的完整内容">
+                        📖 完整阅读
+                    </button>
+                    <button id="close-workbench-btn" class="nav-icon-btn" style="font-size: 1.5rem;">&times;</button>
+                </div>
             </div>
             
             <div class="workbench-body">
@@ -238,8 +270,18 @@
                                 <input type="date" id="workbench-new-date" class="glass-input">
                             </div>
                             <div class="form-group">
-                                <label>目标文件夹</label>
-                                <input type="text" id="workbench-new-folder" class="glass-input" placeholder="例如：整合记忆">
+                                <label>署名 / 目标文件夹 <span style="opacity: 0.5; font-size: 0.8rem;">(maid)</span></label>
+                                <input type="text" id="workbench-new-folder" class="glass-input" placeholder="如：Nova 或 [Nova的知识]Nova">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>文件名 <span style="opacity: 0.5; font-size: 0.8rem;">(可选)</span></label>
+                                <input type="text" id="workbench-new-filename" class="glass-input" placeholder="自定义文件名，留空自动生成">
+                            </div>
+                            <div class="form-group">
+                                <label>标签 <span style="opacity: 0.5; font-size: 0.8rem;">(必选，逗号分隔)</span></label>
+                                <input type="text" id="workbench-new-tags" class="glass-input" placeholder="如：整合记忆, 多源归纳">
                             </div>
                         </div>
                         <div class="form-group" style="flex: 1; display: flex; flex-direction: column;">
@@ -286,10 +328,9 @@
                 <div class="assoc-input-group">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
                         <label style="font-size: 0.9rem; color: var(--secondary-text, var(--text-secondary));">联想强度 (Tag Boost)</label>
-                        <span id="label-boost-value" style="color: var(--accent-color); font-weight: bold;">0.15</span>
                     </div>
-                    <input type="range" id="input-assoc-boost" min="0" max="1" step="0.01" value="0.15" class="glass-range" style="width: 100%;">
-                    <p class="small-text" style="margin-top: 5px; color: var(--secondary-text, var(--text-secondary));">调节标签匹配的权重影响</p>
+                    <input type="text" id="input-assoc-boost" value="0.6+" class="glass-input" style="width: 100%; margin-bottom: 0;" placeholder="0.6 或 0.6+ (启用浪潮V8深度引擎)">
+                    <p class="small-text" style="margin-top: 5px; color: var(--secondary-text, var(--text-secondary));">输入数值如 0.6，加 + 号启用浪潮V8测地线深度追忆引擎</p>
                 </div>
             </div>
 

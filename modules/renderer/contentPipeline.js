@@ -91,7 +91,10 @@ function createContentPipeline(deps = {}) {
 
         ctx.state.toolResultMap = new Map();
         const result = text.replace(toolResultRegex, (match) => {
-            const placeholder = `__VCP_TOOL_RESULT_PLACEHOLDER_${ctx.state.toolResultPlaceholderId}__`;
+            // 🟢 架构级修复：工具结果块保持原始内容不做任何转义
+            // 占位符将贯穿整个 Markdown 解析过程，在 parse() 之后才恢复为渲染好的 HTML
+            // 🔴 关键：使用 HTML 注释格式，避免 __ 被 Markdown 解释为粗体
+            const placeholder = `<!--VCP_TOOL_RESULT_${ctx.state.toolResultPlaceholderId}-->`;
             ctx.state.toolResultMap.set(placeholder, match);
             ctx.state.toolResultPlaceholderId += 1;
             return placeholder;
@@ -111,10 +114,6 @@ function createContentPipeline(deps = {}) {
             ctx.state.codeBlockPlaceholderId += 1;
             return placeholder;
         });
-    }
-
-    function restoreToolResults(text, ctx) {
-        return createMapPlaceholderReplacer(ctx.state.toolResultMap)(text);
     }
 
     function restoreCodeBlocks(text, ctx) {
@@ -167,31 +166,39 @@ function createContentPipeline(deps = {}) {
         const ctx = createContext(inputText, { ...options, mode: PIPELINE_MODES.FULL_RENDER });
 
         step(ctx, 'normalize-emoticon-urls', (text) => fixEmoticonUrlsInMarkdown(text));
+
+        // 顺序协议：
+        // 🔴 关键修复：工具结果必须在「始」/「末」标记转义之前被保护
+        // 否则 processStartEndMarkers 会错误地转义工具结果内部的标记，
+        // 导致后续 transformSpecialBlocks 处理时产生双重转义和内容泄漏
+        // 1. 最先做工具结果保护（它们可能包含任意内容，包括代码块、标记等）
+        step(ctx, 'protect-tool-results', protectToolResults);
+
+        // 2. 然后安全地处理标记转义（此时只处理工具结果外部的标记）
         step(ctx, 'escape-start-end-markers', (text) => processStartEndMarkers(text));
         step(ctx, 'transform-mermaid-placeholders', (text) => transformMermaidPlaceholders(text));
 
-        // 顺序协议：
-        // 1. 先做结构保护
-        step(ctx, 'protect-tool-results', protectToolResults);
+        // 3. 保护代码块
         step(ctx, 'protect-code-blocks', protectCodeBlocks);
 
-        // 2. 再做会改变行首语义/结构边界的修正
+        // 4. 再做会改变行首语义/结构边界的修正
         step(ctx, 'deindent-misinterpreted-code-blocks', (text) => deIndentMisinterpretedCodeBlocks(text));
         step(ctx, 'deindent-html', (text) => deIndentHtml(text));
         step(ctx, 'deindent-tool-request-blocks', (text) => deIndentToolRequestBlocks(text));
 
-        // 3. 再做结构转换
+        // 5. 再做结构转换
         step(ctx, 'transform-desktop-push', transformDesktopPush);
 
-        // 4. 恢复一部分被保护的结构，以便特殊块转换能够识别
-        step(ctx, 'restore-tool-results', restoreToolResults);
+        // 6. 🟢 架构级修复：不再恢复工具结果
+        // 工具结果占位符将贯穿 Markdown 解析，在 parse() 之后才由调用方替换为渲染好的 HTML
+        // 这彻底避免了工具结果内部的 Markdown 语法（表格、代码围栏等）干扰外部解析
 
-        // 5. 特殊块转换、HTML 文档 fenced、通用处理
+        // 7. 特殊块转换（此时工具结果仍为占位符，transformSpecialBlocks 中的 TOOL_RESULT_REGEX 不会匹配到任何内容）
         step(ctx, 'transform-special-blocks', (text) => transformSpecialBlocks(text, ctx.state.codeBlockMap));
         step(ctx, 'ensure-html-fenced', (text) => ensureHtmlFenced(text));
         step(ctx, 'apply-common-content-processors', (text) => applyContentProcessors(text));
 
-        // 6. 最后恢复代码块
+        // 8. 最后恢复代码块
         step(ctx, 'restore-code-blocks', restoreCodeBlocks);
 
         return {

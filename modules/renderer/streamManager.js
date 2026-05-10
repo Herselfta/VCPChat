@@ -974,13 +974,13 @@ function processDesktopPushToken(messageId, textToAppend) {
 
                     if (canPush && state.created) {
                         if (state.isReplaceMode) {
-                            // 替换模式：解析 target:「始」...「末」和 replace:「始」...「末」
-                            const targetMatch = state.buffer.match(/target:「始」([\s\S]*?)「末」/);
-                            const replaceMatch = state.buffer.match(/replace:「始」([\s\S]*?)「末」/);
+                            // 替换模式：解析 target/replace 的「始ESCAPE」「末ESCAPE」或旧版「始」「末」
+                            const targetMatch = state.buffer.match(/target:(?:「始ESCAPE」([\s\S]*?)「末ESCAPE」|「始」([\s\S]*?)「末」)/);
+                            const replaceMatch = state.buffer.match(/replace:(?:「始ESCAPE」([\s\S]*?)「末ESCAPE」|「始」([\s\S]*?)「末」)/);
                             
                             if (targetMatch && replaceMatch) {
-                                const targetSelector = targetMatch[1].trim();
-                                const replaceContent = replaceMatch[1].trim();
+                                const targetSelector = (targetMatch[1] || targetMatch[2] || '').trim();
+                                const replaceContent = (replaceMatch[1] || replaceMatch[2] || '').trim();
                                 electronAPI.desktopPush({
                                     action: 'replace',
                                     targetSelector: targetSelector,
@@ -1298,8 +1298,11 @@ export async function finalizeStreamedMessage(messageId, finishReason, context, 
 
                 const globalSettings = refs.globalSettingsRef.get();
                 // Use the more thorough preprocessFullContent for the final render
-                const processedFinalText = refs.preprocessFullContent(finalFullText, globalSettings);
-                const rawHtml = markedInstance.parse(processedFinalText);
+                // 🟢 架构级修复：preprocessFullContent 现在返回 {text, toolResultMap}
+                // 但这里直接使用 markedInstance.parse()（即 streamingMarkedInstance wrapper），
+                // 它内部已经处理了 preprocessFullContent + LaTeX 保护 + 工具结果恢复
+                // 所以这里直接传原始文本给 wrapper，避免双重预处理
+                const rawHtml = markedInstance.parse(finalFullText);
                 
                 // Perform the final, high-quality render using the original global refresh method.
                 // This ensures images, KaTeX, code highlighting, etc., are all processed correctly.

@@ -27,6 +27,8 @@ const DiaryWorkbench = {
         // 编辑器元素
         this.newDateInput = document.getElementById('workbench-new-date');
         this.newFolderInput = document.getElementById('workbench-new-folder');
+        this.newFilenameInput = document.getElementById('workbench-new-filename');
+        this.newTagsInput = document.getElementById('workbench-new-tags');
         this.newContentInput = document.getElementById('workbench-new-content');
         
         // 绑定关闭按钮
@@ -36,6 +38,10 @@ const DiaryWorkbench = {
         // 绑定发布按钮
         const submitBtn = document.getElementById('workbench-submit-btn');
         if (submitBtn) submitBtn.onclick = () => this.handleCreateIntegratedMemo();
+
+        // 绑定完整阅读按钮
+        const fullReadBtn = document.getElementById('workbench-fullread-btn');
+        if (fullReadBtn) fullReadBtn.onclick = () => this.handleFullRead();
         
         console.log('[Workbench] Module initialized');
     },
@@ -79,6 +85,8 @@ const DiaryWorkbench = {
             } else {
                 this.newFolderInput.value = '整合记忆';
             }
+            this.newFilenameInput.value = '';
+            this.newTagsInput.value = '';
             this.newContentInput.value = '';
         }
 
@@ -150,6 +158,8 @@ const DiaryWorkbench = {
     async handleCreateIntegratedMemo() {
         const date = this.newDateInput.value;
         const folder = this.newFolderInput.value.trim();
+        const fileName = this.newFilenameInput.value.trim();
+        const tags = this.newTagsInput.value.trim();
         const content = this.newContentInput.value.trim();
 
         if (!date || !folder || !content) {
@@ -166,14 +176,22 @@ const DiaryWorkbench = {
             const settings = await memoWorkbenchApi.loadSettings();
             if (!settings?.vcpApiKey) throw new Error('API Key 未配置');
 
-            // 构造 TOOL_REQUEST
-            const toolRequest = `<<<[TOOL_REQUEST]>>>
-maid:「始」${folder}「末」,
+            // 构造 TOOL_REQUEST（可选字段仅在有值时加入）
+            let toolFields = `maid:「始」${folder}「末」,
 tool_name:「始」DailyNote「末」,
 command:「始」create「末」,
-Date:「始」${date}「末」,
-Content:「始」${content}「末」
-<<<[END_TOOL_REQUEST]>>>`;
+Date:「始」${date}「末」,`;
+
+            if (fileName) {
+                toolFields += `\nfileName:「始」${fileName}「末」,`;
+            }
+            if (tags) {
+                toolFields += `\nTag:「始」${tags}「末」,`;
+            }
+
+            toolFields += `\nContent:「始」${content}「末」`;
+
+            const toolRequest = `<<<[TOOL_REQUEST]>>>\n${toolFields}\n<<<[END_TOOL_REQUEST]>>>`;
 
             const res = await fetch(`${serverBaseUrl}v1/human/tool`, {
                 method: 'POST',
@@ -186,8 +204,17 @@ Content:「始」${content}「末」
 
             if (!res.ok) throw new Error(await res.text());
 
-            // 成功后处理
-            alert('整合日记发布成功！');
+            // 发布成功 → 弹出旧日记处理弹窗
+            const referencedMemos = [...this.selectedMemos];
+            const action = await this.showPostPublishDialog(referencedMemos.length);
+
+            if (action === 'archive') {
+                await this.handleArchiveOldMemos(referencedMemos);
+            } else if (action === 'delete') {
+                await this.handleDeleteOldMemos(referencedMemos);
+            }
+            // action === 'keep' → 不做任何操作
+
             this.close();
             
             // 刷新主界面列表
@@ -203,6 +230,120 @@ Content:「始」${content}「末」
         } finally {
             submitBtn.disabled = false;
             submitBtn.textContent = originalText;
+        }
+    },
+
+    // 显示发布后旧日记处理弹窗，返回 'keep' | 'archive' | 'delete'
+    showPostPublishDialog(count) {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('post-publish-modal');
+            const countEl = document.getElementById('post-publish-count');
+            const keepBtn = document.getElementById('post-publish-keep-btn');
+            const archiveBtn = document.getElementById('post-publish-archive-btn');
+            const deleteBtn = document.getElementById('post-publish-delete-btn');
+
+            countEl.textContent = count;
+            modal.style.display = 'flex';
+
+            const cleanup = () => {
+                modal.style.display = 'none';
+                keepBtn.removeEventListener('click', onKeep);
+                archiveBtn.removeEventListener('click', onArchive);
+                deleteBtn.removeEventListener('click', onDelete);
+            };
+
+            const onKeep = () => { cleanup(); resolve('keep'); };
+            const onArchive = () => { cleanup(); resolve('archive'); };
+            const onDelete = () => { cleanup(); resolve('delete'); };
+
+            keepBtn.addEventListener('click', onKeep);
+            archiveBtn.addEventListener('click', onArchive);
+            deleteBtn.addEventListener('click', onDelete);
+        });
+    },
+
+    // 归档旧日记：移动到「已整理」文件夹
+    async handleArchiveOldMemos(memos) {
+        if (!memos || memos.length === 0) return;
+        try {
+            const sourceNotes = memos.map(m => ({ folder: m.folder, file: m.name }));
+            await apiFetch('/move', {
+                method: 'POST',
+                body: JSON.stringify({
+                    sourceNotes,
+                    targetFolder: '已整理'
+                })
+            });
+            console.log(`[Workbench] ${memos.length} 篇日记已归档到「已整理」`);
+        } catch (error) {
+            console.error('[Workbench] 归档失败:', error);
+            alert('归档旧日记失败: ' + error.message);
+        }
+    },
+
+    // 完整阅读：加载所有引用日记的全文，用 text-viewer 展示
+    async handleFullRead() {
+        if (this.selectedMemos.length === 0) {
+            alert('工作台中没有引用的日记');
+            return;
+        }
+
+        const fullReadBtn = document.getElementById('workbench-fullread-btn');
+        const originalText = fullReadBtn.textContent;
+        fullReadBtn.disabled = true;
+        fullReadBtn.textContent = '📖 加载中...';
+
+        try {
+            const sections = [];
+            const pathList = [];
+
+            for (const memo of this.selectedMemos) {
+                const path = `${memo.folder}/${memo.name}`;
+                pathList.push(path);
+
+                try {
+                    const data = await apiFetch(`/note/${encodeURIComponent(memo.folder)}/${encodeURIComponent(memo.name)}`);
+                    sections.push(`${'═'.repeat(60)}\n📁 ${path}\n${'═'.repeat(60)}\n\n${data.content}\n`);
+                } catch (err) {
+                    sections.push(`${'═'.repeat(60)}\n📁 ${path}\n${'═'.repeat(60)}\n\n⚠️ 加载失败: ${err.message}\n`);
+                }
+            }
+
+            // 构建完整文本：路径索引 + 每篇日记全文
+            const header = `# 工作台引用日记 — 完整阅读\n\n共 ${this.selectedMemos.length} 篇日记\n\n## 📋 路径索引\n\n${pathList.map((p, i) => `${i + 1}. \`${p}\``).join('\n')}\n\n---\n\n`;
+            const fullText = header + sections.join('\n');
+
+            // 调用 VCP 阅读器打开
+            if (memoWorkbenchApi.openTextInNewWindow) {
+                const theme = await memoWorkbenchApi.getCurrentTheme?.() || 'dark';
+                await memoWorkbenchApi.openTextInNewWindow(fullText, `工作台完整阅读 (${this.selectedMemos.length} 篇)`, theme);
+            } else {
+                // 降级：复制到剪贴板
+                await navigator.clipboard.writeText(fullText);
+                alert('阅读器不可用，已将全部内容复制到剪贴板');
+            }
+        } catch (error) {
+            console.error('[Workbench] 完整阅读失败:', error);
+            alert('完整阅读失败: ' + error.message);
+        } finally {
+            fullReadBtn.disabled = false;
+            fullReadBtn.textContent = originalText;
+        }
+    },
+
+    // 删除旧日记
+    async handleDeleteOldMemos(memos) {
+        if (!memos || memos.length === 0) return;
+        try {
+            const notesToDelete = memos.map(m => ({ folder: m.folder, file: m.name }));
+            await apiFetch('/delete-batch', {
+                method: 'POST',
+                body: JSON.stringify({ notesToDelete })
+            });
+            console.log(`[Workbench] ${memos.length} 篇旧日记已删除`);
+        } catch (error) {
+            console.error('[Workbench] 删除失败:', error);
+            alert('删除旧日记失败: ' + error.message);
         }
     }
 };

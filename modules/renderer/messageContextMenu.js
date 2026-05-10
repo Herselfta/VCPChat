@@ -197,8 +197,10 @@ function showContextMenu(event, messageItem, message) {
             if (contentDiv) {
                 // 克隆节点以避免修改实时显示的DOM
                 const contentClone = contentDiv.cloneNode(true);
-                // 移除工具使用气泡、样式表和脚本，以获得更干净的复制内容
-                contentClone.querySelectorAll('.vcp-tool-use-bubble, .vcp-tool-result-bubble, style, script').forEach(el => el.remove());
+                // 移除不应参与复制的渲染辅助节点，避免把附件删除按钮的 × 一起复制进去
+                contentClone.querySelectorAll(
+                    '.vcp-tool-use-bubble, .vcp-tool-result-bubble, .message-attachments, .message-attachment-remove-btn, style, script'
+                ).forEach(el => el.remove());
                 // 修复：清理多余的空行，确保最多只有一个空行
                 textToCopy = contentClone.innerText.replace(/\n{3,}/g, '\n\n').trim();
             } else {
@@ -489,7 +491,8 @@ function toggleEditMode(messageItem, message) {
             contextMenuDependencies.updateMessageContent(message.id, textToDisplay);
         } else {
             // Fallback for safety, though updateMessageContent should be available now
-            const rawHtml = markedInstance.parse(contextMenuDependencies.preprocessFullContent(textToDisplay));
+            const ppResult = contextMenuDependencies.preprocessFullContent(textToDisplay);
+            const rawHtml = markedInstance.parse(ppResult.text || ppResult);
             contextMenuDependencies.setContentAndProcessImages(contentDiv, rawHtml, message.id);
             contextMenuDependencies.processRenderedContent(contentDiv);
             setTimeout(() => {
@@ -600,7 +603,8 @@ function toggleEditMode(messageItem, message) {
                     contextMenuDependencies.updateMessageContent(message.id, newContent);
                 } else {
                     // Fallback for safety
-                    const rawHtml = markedInstance.parse(contextMenuDependencies.preprocessFullContent(newContent));
+                    const ppResult2 = contextMenuDependencies.preprocessFullContent(newContent);
+                    const rawHtml = markedInstance.parse(ppResult2.text || ppResult2);
                     contextMenuDependencies.setContentAndProcessImages(contentDiv, rawHtml, message.id);
                     contextMenuDependencies.processRenderedContent(contentDiv);
                     contextMenuDependencies.renderAttachments(message, contentDiv);

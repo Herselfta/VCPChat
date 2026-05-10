@@ -49,6 +49,7 @@ export async function handleSaveGlobalSettings(e, deps) {
         enableRegenerateConfirmation: document.getElementById('enableRegenerateConfirmation').checked,
         vcpServerUrl: settingsManager.completeVcpUrl(document.getElementById('vcpServerUrl').value.trim()),
         vcpApiKey: document.getElementById('vcpApiKey').value,
+        fileKey: document.getElementById('fileKey')?.value || '',
         vcpLogUrl: document.getElementById('vcpLogUrl').value.trim(),
         vcpLogKey: document.getElementById('vcpLogKey').value.trim(),
         topicSummaryModel: document.getElementById('topicSummaryModel').value.trim(),
@@ -83,13 +84,13 @@ export async function handleSaveGlobalSettings(e, deps) {
         voiceMode,
         speechRecognizerBrowserPath,
         speechRecognizerPagePath,
-        voiceNetworkSettings: {
-            sovitsUrl: document.getElementById('voiceNetworkSovitsUrl')?.value.trim() || '',
-            sovitsKey: document.getElementById('voiceNetworkSovitsKey')?.value || ''
-        },
         voiceLocalSettings: {
-            providerUrl: document.getElementById('voiceLocalProviderUrl')?.value.trim() || '',
-            providerKey: document.getElementById('voiceLocalProviderKey')?.value || ''
+            sovitsUrl: document.getElementById('voiceLocalSovitsUrl')?.value.trim() || '',
+            sovitsKey: document.getElementById('voiceLocalSovitsKey')?.value || ''
+        },
+        voiceNetworkSettings: {
+            providerUrl: document.getElementById('voiceNetworkProviderUrl')?.value.trim() || '',
+            providerKey: document.getElementById('voiceNetworkProviderKey')?.value || ''
         },
         enableDistributedServer: document.getElementById('enableDistributedServer').checked,
         agentMusicControl: document.getElementById('agentMusicControl').checked,

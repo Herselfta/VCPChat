@@ -70,6 +70,7 @@ class SettingsManager extends EventEmitter {
             userName: '用户',
             vcpServerUrl: '',
             vcpApiKey: '',
+            fileKey: '',
             vcpLogUrl: '',
             vcpLogKey: '',
             networkNotesPaths: [],
@@ -98,11 +99,11 @@ class SettingsManager extends EventEmitter {
             voiceMode: 'local',
             speechRecognizerBrowserPath: '',
             speechRecognizerPagePath: 'Voicechatmodules/recognizer.html',
-            voiceNetworkSettings: {
+            voiceLocalSettings: {
                 sovitsUrl: '',
                 sovitsKey: ''
             },
-            voiceLocalSettings: {
+            voiceNetworkSettings: {
                 providerUrl: '',
                 providerKey: ''
             },

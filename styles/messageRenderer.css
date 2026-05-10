@@ -969,6 +969,55 @@ body.light-theme .vcp-tool-result-status:containing("SUCCESS") {
     font-family: var(--vcp-chat-code-font-family, 'Consolas', 'Monaco', 'Courier New', monospace) !important;
 }
 
+/* 🔴 工具结果纯文本内容（禁止 markdown 渲染后的 <pre> 容器） */
+.vcp-tool-result-raw-content {
+    margin: 4px 0;
+    padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--vcp-chat-code-font-family, 'Consolas', 'Monaco', 'Courier New', monospace) !important;
+    font-size: 0.88em;
+    line-height: 1.5;
+    color: var(--tool-result-item-value-color);
+    max-height: 400px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+body:not(.light-theme) .vcp-tool-result-raw-content {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+/* 🟢 工具结果 Markdown 渲染内容容器（架构级修复：独立渲染，支持表格/代码块） */
+.vcp-tool-result-markdown-content {
+    margin: 4px 0;
+    padding: 4px 0;
+    max-height: 500px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    word-break: break-word;
+}
+
+.vcp-tool-result-markdown-content pre {
+    margin: 6px 0;
+    padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: 6px;
+    font-family: var(--vcp-chat-code-font-family, 'Consolas', 'Monaco', 'Courier New', monospace) !important;
+    font-size: 0.88em;
+    line-height: 1.5;
+    overflow-x: auto;
+}
+
+body:not(.light-theme) .vcp-tool-result-markdown-content pre {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.vcp-tool-result-markdown-content > p:first-child { margin-top: 0; }
+.vcp-tool-result-markdown-content > p:last-child { margin-bottom: 0; }
+
 /* Markdown support inside tool result bubble */
 .vcp-tool-result-item-value>p:first-child,
 .vcp-tool-result-footer>p:first-child {
@@ -1554,4 +1603,37 @@ body.light-theme .vcp-desktop-push-label {
 body.light-theme .vcp-desktop-push-preview pre {
     background: rgba(0, 0, 0, 0.05);
     color: rgba(0, 0, 0, 0.5);
+}
+
+/* --- Markdown Horizontal Rule Refinement --- */
+.md-content hr,
+.diary-content hr,
+.vcp-tool-result-markdown-content hr,
+.vcp-thought-chain-body hr {
+    border: 0;
+    height: 1px;
+    margin: 1.1em 0;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        color-mix(in srgb, var(--secondary-text, #586374) 22%, transparent) 18%,
+        color-mix(in srgb, var(--secondary-text, #586374) 72%, transparent) 50%,
+        color-mix(in srgb, var(--secondary-text, #586374) 22%, transparent) 82%,
+        transparent 100%
+    );
+    opacity: 0.95;
+}
+
+body.light-theme .md-content hr,
+body.light-theme .diary-content hr,
+body.light-theme .vcp-tool-result-markdown-content hr,
+body.light-theme .vcp-thought-chain-body hr {
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        color-mix(in srgb, var(--secondary-text, #9ca0a4) 18%, transparent) 18%,
+        color-mix(in srgb, var(--secondary-text, #9ca0a4) 58%, transparent) 50%,
+        color-mix(in srgb, var(--secondary-text, #9ca0a4) 18%, transparent) 82%,
+        transparent 100%
+    );
 }
