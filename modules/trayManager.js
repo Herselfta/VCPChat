@@ -14,16 +14,19 @@ const trayManager = (function () {
 
     // 常用应用 ID 列表（默认 4 个）
     let pinnedAppIds = ['vchat-app-translator', 'vchat-app-notes', 'vchat-app-music', 'vchat-app-canvas'];
+    let outsideClickListenerBound = false;
 
     // VChat 系统应用注册表 (从 vchatApps.js 复制的核心定义)
     const VCHAT_APPS = [
         { id: 'vchat-app-notes', name: '笔记', icon: 'notes', action: 'open-notes-window' },
+        { id: 'vchat-app-note-mini', name: '便签', icon: 'noteMini', action: 'open-note-mini-window' },
         { id: 'vchat-app-translator', name: '翻译', icon: 'translator', action: 'open-translator-window' },
         { id: 'vchat-app-music', name: '音乐', icon: 'music', action: 'open-music-window' },
         { id: 'vchat-app-canvas', name: '协同', icon: 'canvas', action: 'open-canvas-window' },
         { id: 'vchat-app-main', name: 'VChat', icon: 'chat', action: 'show-main-window' },
         { id: 'vchat-app-memo', name: '记忆', icon: 'memo', action: 'open-memo-window' },
         { id: 'vchat-app-forum', name: '论坛', icon: 'forum', action: 'open-forum-window' },
+        { id: 'vchat-app-log', name: '日志', icon: 'log', action: 'open-log-window' },
         { id: 'vchat-app-dice', name: '骰子', icon: 'dice', action: 'open-dice-window' },
         { id: 'vchat-app-rag-observer', name: '监听', icon: 'rag', action: 'open-rag-observer-window' },
         { id: 'vchat-app-themes', name: '主题', icon: 'themes', action: 'open-themes-window' },
@@ -37,9 +40,11 @@ const trayManager = (function () {
     const SVG_ICONS = {
         chat: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-message-square"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
         notes: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-notebook-pen"><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/></svg>`,
+        noteMini: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sticky-note"><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8Z"/><path d="M15 3v4a2 2 0 0 0 2 2h4"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>`,
         memo: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-brain"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .52 8.208 4 4 0 0 0 6.503 2.046 4 4 0 0 0 6.503-2.046 4 4 0 0 0 .52-8.208 4 4 0 0 0-2.526-5.77A3 3 0 1 0 12 5Z"/><path d="M9 13a4.5 4.5 0 0 0 3 4"/><path d="M15 13a4.5 4.5 0 0 1-3 4"/><path d="M12 17v4"/></svg>`,
         forum: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-layout-grid"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>`,
         rag: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-activity"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`,
+        log: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-scroll-text"><path d="M15 12H9"/><path d="M15 8H9"/><path d="M19 17V5a2 2 0 0 0-2-2H5"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg>`,
         dice: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-dice-5"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><path d="M16 8h.01"/><path d="M8 8h.01"/><path d="M8 16h.01"/><path d="M16 16h.01"/><path d="M12 12h.01"/></svg>`,
         canvas: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-code-xml"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>`,
         translator: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-languages"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>`,
@@ -181,14 +186,21 @@ const trayManager = (function () {
         if (isActive) {
             drawer.classList.add('active');
             btn.classList.add('active');
-            // 添加一次性点击监听用于关闭
-            setTimeout(() => {
-                document.addEventListener('click', closeOnOutsideClick);
-            }, 0);
+
+            // 防止重复打开时叠加全局点击监听
+            if (!outsideClickListenerBound) {
+                outsideClickListenerBound = true;
+                setTimeout(() => {
+                    document.addEventListener('click', closeOnOutsideClick, true);
+                }, 0);
+            }
         } else {
             drawer.classList.remove('active');
             btn.classList.remove('active');
-            document.removeEventListener('click', closeOnOutsideClick);
+            if (outsideClickListenerBound) {
+                document.removeEventListener('click', closeOnOutsideClick, true);
+                outsideClickListenerBound = false;
+            }
         }
     }
 

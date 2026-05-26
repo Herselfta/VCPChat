@@ -1,6 +1,8 @@
 const SHARED_KEYS = [
     'loadSettings',
     'loadWebindexModels',
+    'loadTranslatorSettings',
+    'saveTranslatorSettings',
     'saveSettings',
     'saveUserAvatar',
     'saveAvatarColor',
@@ -36,6 +38,7 @@ const SHARED_KEYS = [
     'openVoiceChatWindow',
     'openForumWindow',
     'openMemoWindow',
+    'openLogWindow',
     'openMusicWindow',
     'openCanvasWindow',
     'openDesktopWindow',

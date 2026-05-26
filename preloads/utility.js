@@ -102,6 +102,8 @@ function createCatalog(ops) {
     return {
         // Shared shell/config/theme helpers
         loadSettings: query(() => ops.invoke('load-settings')),
+        loadTranslatorSettings: query(() => ops.invoke('load-translator-settings')),
+        saveTranslatorSettings: query((settings) => ops.invoke('save-translator-settings', settings)),
         saveSettings: query((settings) => ops.invoke('save-settings', settings)),
         saveUserAvatar: query((avatarData) => ops.invoke('save-user-avatar', avatarData)),
         saveAvatarColor: query((data) => ops.invoke('save-avatar-color', data)),
@@ -147,6 +149,7 @@ function createCatalog(ops) {
 
         // Shared window launching
         openNotesWindow: query((theme) => ops.invoke('open-notes-window', theme)),
+        openNoteMiniWindow: query(() => ops.invoke('open-note-mini-window')),
         openNotesWithContent: query((data) => ops.invoke('open-notes-with-content', data)),
         openTranslatorWindow: query((theme) => ops.invoke('open-translator-window', theme)),
         openRAGObserverWindow: query(() => ops.invoke('open-rag-observer-window')),
@@ -154,6 +157,7 @@ function createCatalog(ops) {
         openVoiceChatWindow: command((data) => ops.send('open-voice-chat-window', data)),
         openForumWindow: command(() => ops.send('open-forum-window')),
         openMemoWindow: command(() => ops.send('open-memo-window')),
+        openLogWindow: command(() => ops.send('open-log-window')),
         openMusicWindow: command(() => ops.send('open-music-window')),
         openDiceWindow: query(() => ops.invoke('open-dice-window')),
         openCanvasWindow: query(() => ops.invoke('open-canvas-window')),
@@ -264,6 +268,7 @@ function createCatalog(ops) {
         // Utility APIs
         readNotesTree: query(() => ops.invoke('read-notes-tree')),
         writeTxtNote: query((noteData) => ops.invoke('write-txt-note', noteData)),
+        saveMiniNote: query((noteData) => ops.invoke('save-mini-note', noteData)),
         deleteItem: query((itemPath) => ops.invoke('delete-item', itemPath)),
         createNoteFolder: query((data) => ops.invoke('create-note-folder', data)),
         renameItem: query((data) => ops.invoke('rename-item', data)),
@@ -273,6 +278,7 @@ function createCatalog(ops) {
         copyNoteContent: query((filePath) => ops.invoke('copy-note-content', filePath)),
         scanNetworkNotes: command(() => ops.send('scan-network-notes')),
         onNetworkNotesScanned: subscription(ops.subscribe('network-notes-scanned', (_event, networkTree) => networkTree)),
+        onLocalNotesChanged: subscription(ops.subscribe('local-notes-changed', () => undefined)),
         getCachedNetworkNotes: query(() => ops.invoke('get-cached-network-notes')),
         searchNotes: query((queryText) => ops.invoke('search-notes', queryText)),
         onSharedNoteData: subscription(ops.subscribe('shared-note-data', (_event, data) => data)),
@@ -424,6 +430,8 @@ function createCatalog(ops) {
 
 const ALLOWED_KEYS = [
     "loadSettings",
+    "loadTranslatorSettings",
+    "saveTranslatorSettings",
     "saveSettings",
     "saveUserAvatar",
     "saveAvatarColor",
@@ -452,6 +460,7 @@ const ALLOWED_KEYS = [
     "getPlatform",
     "getWallpaperThumbnail",
     "openNotesWindow",
+    "openNoteMiniWindow",
     "openNotesWithContent",
     "openTranslatorWindow",
     "openRAGObserverWindow",
@@ -459,6 +468,7 @@ const ALLOWED_KEYS = [
     "openVoiceChatWindow",
     "openForumWindow",
     "openMemoWindow",
+    "openLogWindow",
     "openMusicWindow",
     "openCanvasWindow",
     "openDesktopWindow",
@@ -476,6 +486,7 @@ const ALLOWED_KEYS = [
     "executePythonCode",
     "readNotesTree",
     "writeTxtNote",
+    "saveMiniNote",
     "deleteItem",
     "createNoteFolder",
     "renameItem",
@@ -485,6 +496,7 @@ const ALLOWED_KEYS = [
     "copyNoteContent",
     "scanNetworkNotes",
     "onNetworkNotesScanned",
+    "onLocalNotesChanged",
     "getCachedNetworkNotes",
     "searchNotes",
     "onSharedNoteData",

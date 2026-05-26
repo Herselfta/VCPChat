@@ -17,13 +17,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     const customContextMenu = document.getElementById('customContextMenu');
     const resizer = document.getElementById('resizer');
     const sidebar = document.querySelector('.sidebar');
+    const noteBody = document.querySelector('.note-body');
+    const editorContainer = document.querySelector('.editor-container');
+    const previewContainer = document.querySelector('.preview-container');
+    const editorPreviewResizer = document.getElementById('editorPreviewResizer');
     const confirmationModal = document.getElementById('confirmationModal');
     const modalTitle = document.getElementById('modalTitle');
     const modalMessage = document.getElementById('modalMessage');
     const modalConfirmBtn = document.getElementById('modalConfirmBtn');
     const modalCancelBtn = document.getElementById('modalCancelBtn');
+    const editorFindBar = document.getElementById('editorFindBar');
+    const editorFindInput = document.getElementById('editorFindInput');
+    const editorFindStatus = document.getElementById('editorFindStatus');
+    const editorFindPrev = document.getElementById('editorFindPrev');
+    const editorFindNext = document.getElementById('editorFindNext');
+    const editorFindClose = document.getElementById('editorFindClose');
+    const editorContextMenu = document.getElementById('editorContextMenu');
+    const editorContextUndo = document.getElementById('editor-context-undo');
+    const editorContextCut = document.getElementById('editor-context-cut');
+    const editorContextCopy = document.getElementById('editor-context-copy');
+    const editorContextPaste = document.getElementById('editor-context-paste');
+    const editorContextSelectAll = document.getElementById('editor-context-select-all');
 
     // --- Custom Title Bar Elements ---
+    const previewToggleBtn = document.getElementById('preview-toggle-btn');
     const minimizeNotesBtn = document.getElementById('minimize-notes-btn');
     const maximizeNotesBtn = document.getElementById('maximize-notes-btn');
     const closeNotesBtn = document.getElementById('close-notes-btn');
@@ -42,7 +59,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     let dragState = {
         sourceIds: null,
         lastDragOverElement: null,
+        lastDragOverVisualElement: null,
         dropAction: null, // Can be 'before', 'after', 'inside'
+        rafId: null,
+        autoScrollFrameId: null,
+        pendingDragOverEvent: null,
+        lastPointer: null,
     };
 
     // --- SVG Icons ---
@@ -50,6 +72,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     const CLOUD_FOLDER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="item-icon"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"></path></svg>`;
     const NOTE_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="item-icon"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z"></path></svg>`;
     const TOGGLE_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="folder-toggle"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"></path></svg>`;
+
+
+    // --- Preview Panel Toggle ---
+    function updatePreviewToggleState(isPreviewCollapsed) {
+        document.body.classList.toggle('preview-collapsed', isPreviewCollapsed);
+        previewToggleBtn.classList.toggle('is-collapsed', isPreviewCollapsed);
+        previewToggleBtn.title = isPreviewCollapsed ? '打开预览区' : '关闭预览区';
+        previewToggleBtn.setAttribute('aria-label', isPreviewCollapsed ? '打开预览区' : '关闭预览区');
+        previewToggleBtn.setAttribute('aria-pressed', String(isPreviewCollapsed));
+        localStorage.setItem('notesPreviewCollapsed', String(isPreviewCollapsed));
+
+        if (window.pretextBridge && window.pretextBridge.isReady()) {
+            requestAnimationFrame(() => window.pretextBridge.recalculateAll(window.innerWidth));
+        }
+    }
+
+    function togglePreviewPanel() {
+        updatePreviewToggleState(!document.body.classList.contains('preview-collapsed'));
+    }
 
 
     // --- Debounce & Utility Functions ---
@@ -184,6 +225,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // --- Theme Management ---
+    let currentMermaidTheme = null;
     function applyTheme(theme) {
         const currentTheme = theme || 'dark'; // Fallback to dark if theme is null/undefined
         const highlightThemeStyle = document.getElementById('highlight-theme-style');
@@ -194,6 +236,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             highlightThemeStyle.href = currentTheme === 'light'
                 ? "../vendor/atom-one-light.min.css"
                 : "../vendor/atom-one-dark.min.css";
+        }
+
+        // Sync mermaid theme so subsequent diagrams match the app theme.
+        const desiredMermaidTheme = currentTheme === 'light' ? 'default' : 'dark';
+        if (window.mermaid && typeof window.mermaid.initialize === 'function'
+            && desiredMermaidTheme !== currentMermaidTheme) {
+            try {
+                window.mermaid.initialize({
+                    startOnLoad: false,
+                    theme: desiredMermaidTheme,
+                    securityLevel: 'loose'
+                });
+                const previousTheme = currentMermaidTheme;
+                currentMermaidTheme = desiredMermaidTheme;
+                // Re-render the active note so the new mermaid theme takes effect.
+                if (previousTheme !== null && activeNoteId) {
+                    const note = findItemById(getCombinedTree(), activeNoteId);
+                    if (note) renderMarkdown(note.content);
+                }
+            } catch (e) {
+                console.warn('[Notes] Failed to re-initialize mermaid theme:', e);
+            }
         }
     }
     
@@ -280,7 +344,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         processed = ensureSpecialBlockFenced(processed, '<<<[TOOL_REQUEST]>>>', '<<<[END_TOOL_REQUEST]>>>');
         processed = ensureSpecialBlockFenced(processed, '<<<DailyNoteStart>>>', '<<<DailyNoteEnd>>>');
         processed = ensureHtmlFenced(processed);
-        processed = processed.replace(/^(\s*```)(?![\r\n])/gm, '$1\n');
+        // Do not split fenced code info strings such as ```mermaid / ```js.
+        // Splitting them into "```\nmermaid" makes marked lose the language hint.
         processed = processed.replace(/~(?![\s~])/g, '~ ');
         processed = processed.replace(/^(\s*)(```.*)/gm, '$2');
         processed = processed.replace(/(<img[^>]+>)\s*(```)/g, '$1\n\n<!-- VCP-Renderer-Separator -->\n\n$2');
@@ -323,13 +388,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         const cleanHtmlBody = DOMPurify.sanitize(htmlWithoutStyles, {
             // We don't need to allow 'style' tags here anymore as they are handled separately.
             ADD_TAGS: ['img', 'div'],
-            ADD_ATTR: ['style'], // Still allow inline styles on elements like <div style="...">.
+            ADD_ATTR: ['style', 'class'], // Keep inline styles and semantic classes such as mermaid.
             ALLOW_UNKNOWN_PROTOCOLS: true,
             FORCE_BODY: true
         });
 
         // Re-combine the sanitized body with the original, un-sanitized style blocks.
         previewContentDiv.innerHTML = styleBlocks.join('\n') + cleanHtmlBody;
+
+        // --- Extract Mermaid blocks BEFORE hljs runs (hljs would inject spans and break parsing) ---
+        const mermaidNodes = collectMermaidNodes(previewContentDiv);
 
         // Post-rendering enhancements
         if (window.renderMathInElement) {
@@ -345,11 +413,107 @@ document.addEventListener('DOMContentLoaded', async () => {
         addCopyButtonsToCodeBlocks();
         makeImagesClickable();
 
+        // Render mermaid diagrams (async). Capture the current note id so a quick switch
+        // between notes won't paint stale diagrams into the new note.
+        if (mermaidNodes.length > 0) {
+            const renderTokenId = activeNoteId;
+            renderMermaidNodes(mermaidNodes, renderTokenId);
+        }
+
         // --- Pretext Integration ---
         // 为笔记预览生成 Pretext 高度缓存 (使用当前预览容器宽度)
         if (window.pretextBridge && window.pretextBridge.isReady() && activeNoteId) {
             const previewWidth = previewContentDiv.offsetWidth || 500;
             window.pretextBridge.estimateHeight('note-' + activeNoteId, markdown, 'note', previewWidth);
+        }
+    }
+
+    // --- Mermaid helpers ---
+    function escapeHtmlForMermaid(text) {
+        if (typeof text !== 'string') return '';
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    // Mermaid diagram-type keyword patterns. If a fenced block starts with one of these
+    // (and has no other obvious language), we treat it as mermaid even when the language
+    // tag is missing or marked didn't attach a `language-*` class.
+    const MERMAID_CONTENT_PATTERN = /^\s*(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|gitGraph|mindmap|timeline|requirementDiagram|quadrantChart|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment|xychart-beta|sankey-beta|block-beta)\b/;
+    const MERMAID_LANGUAGES = new Set(['mermaid', 'graph', 'flowchart']);
+
+    // Find code blocks rendered by marked and replace mermaid ones with a <div class="mermaid">
+    // node that mermaid.run() can take over. Works for both:
+    //   <pre><code class="language-mermaid">...</code></pre>
+    //   <pre><code>graph TD ...</code></pre>   (no language tag, detected by content)
+    function collectMermaidNodes(container) {
+        const nodes = Array.from(container.querySelectorAll('.mermaid'));
+        nodes.push(...extractMermaidBlocks(container));
+        return [...new Set(nodes)];
+    }
+
+    function extractMermaidBlocks(container) {
+        const nodes = [];
+        const codeBlocks = container.querySelectorAll('pre code');
+        codeBlocks.forEach((codeBlock) => {
+            // textContent decodes HTML entities so '&gt;' becomes '>', which mermaid needs.
+            const code = (codeBlock.textContent || '').trim();
+            if (!code) return;
+
+            // Look at language hints in a few common forms.
+            const langClass = Array.from(codeBlock.classList)
+                .find(c => c.startsWith('language-') || c.startsWith('lang-'));
+            const language = langClass
+                ? langClass.replace(/^(?:language-|lang-)/, '').toLowerCase()
+                : '';
+
+            const matchByLanguage = MERMAID_LANGUAGES.has(language);
+            // Only fall back to content sniffing when there's NO language tag, to avoid
+            // hijacking unrelated code blocks (e.g. a "graph" variable in a JS snippet).
+            const matchByContent = !language && MERMAID_CONTENT_PATTERN.test(code);
+
+            if (!matchByLanguage && !matchByContent) return;
+
+            const preElement = codeBlock.parentElement;
+            if (!preElement || !preElement.parentNode) return;
+
+            const mermaidContainer = document.createElement('div');
+            mermaidContainer.className = 'mermaid';
+            mermaidContainer.textContent = code;
+            preElement.parentNode.replaceChild(mermaidContainer, preElement);
+            nodes.push(mermaidContainer);
+        });
+        return nodes;
+    }
+
+    async function renderMermaidNodes(nodes, renderTokenId) {
+        if (!window.mermaid || nodes.length === 0) return;
+        try {
+            nodes.forEach(node => node.removeAttribute('data-processed'));
+            if (typeof window.mermaid.run === 'function') {
+                await window.mermaid.run({ nodes });
+            } else if (typeof window.mermaid.init === 'function') {
+                window.mermaid.init(undefined, nodes);
+            }
+        } catch (error) {
+            console.error('[Notes] Mermaid render error:', error);
+            nodes.forEach(el => {
+                if (!el.isConnected) return;
+                const originalCode = el.textContent || '';
+                el.innerHTML = `<div class="mermaid-error">Mermaid 渲染错误: ${escapeHtmlForMermaid(error.message || String(error))}</div><pre>${escapeHtmlForMermaid(originalCode)}</pre>`;
+            });
+        }
+
+        // If the user switched notes while mermaid was rendering, drop the stale output.
+        if (renderTokenId !== activeNoteId) {
+            nodes.forEach(el => {
+                if (el.isConnected && el.parentNode === previewContentDiv.parentNode) {
+                    // No-op; the next renderMarkdown will overwrite previewContentDiv.innerHTML.
+                }
+            });
         }
     }
 
@@ -510,7 +674,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             const childrenUl = document.createElement('ul');
             childrenUl.className = 'folder-content';
             childrenUl.classList.toggle('collapsed', isCollapsed);
-            if (item.children) {
+
+            // PERFORMANCE: Do not build hidden subtree DOM for collapsed folders.
+            // Large cloud folders can contain thousands of notes; keeping their hidden DOM around
+            // makes dragover hit-testing and selector scans visibly stutter.
+            if (item.children && !isCollapsed) {
                 item.children.forEach(child => childrenUl.appendChild(createTreeElement(child)));
             }
             li.appendChild(childrenUl);
@@ -539,6 +707,34 @@ document.addEventListener('DOMContentLoaded', async () => {
             expandedFolders.add(folderId);
         }
         renderTree(); // Re-render to reflect the change
+    }
+
+    // PERFORMANCE: Update only the selection/active visual state without rebuilding the tree.
+    // Used by click & context-menu paths so they don't block the main thread on large trees.
+    function updateSelectionVisuals() {
+        // Clear current visuals
+        noteList.querySelectorAll('.selected, .active').forEach(el => {
+            el.classList.remove('selected', 'active');
+        });
+
+        const getVisualTarget = (li) => {
+            if (!li) return null;
+            return li.matches('.note-item') ? li : li.querySelector(':scope > .folder-header-row');
+        };
+
+        // Apply selection
+        selectedItems.forEach(id => {
+            const li = noteList.querySelector(`li[data-id="${CSS.escape(id)}"]`);
+            const target = getVisualTarget(li);
+            if (target) target.classList.add('selected');
+        });
+
+        // Apply active
+        if (activeItemId) {
+            const li = noteList.querySelector(`li[data-id="${CSS.escape(activeItemId)}"]`);
+            const target = getVisualTarget(li);
+            if (target) target.classList.add('active');
+        }
     }
 
     // --- Event Handlers ---
@@ -577,7 +773,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else {
             clearNoteEditor();
         }
-        renderTree();
+        // PERFORMANCE: Avoid re-rendering the whole tree just to move the selection highlight.
+        updateSelectionVisuals();
     }
 
     async function selectNote(id, notePath) {
@@ -658,6 +855,232 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- Save & Delete Logic ---
     const debouncedSaveNote = debounce(() => saveCurrentNote(true), 3000);
     const debouncedRender = debounce((content) => renderMarkdown(content), 300);
+
+    // --- Editor Search & Context Menu Logic ---
+    let editorSearchMatches = [];
+    let editorSearchIndex = -1;
+
+    function isEditorFocused() {
+        return document.activeElement === noteContentInput;
+    }
+
+    function updateEditorFindStatus() {
+        const total = editorSearchMatches.length;
+        const current = total > 0 ? editorSearchIndex + 1 : 0;
+        editorFindStatus.textContent = `${current}/${total}`;
+        editorFindPrev.disabled = total === 0;
+        editorFindNext.disabled = total === 0;
+    }
+
+    function collectEditorSearchMatches(query) {
+        editorSearchMatches = [];
+        editorSearchIndex = -1;
+
+        if (!query) {
+            updateEditorFindStatus();
+            return;
+        }
+
+        const content = noteContentInput.value;
+        const lowerContent = content.toLowerCase();
+        const lowerQuery = query.toLowerCase();
+        let fromIndex = 0;
+
+        while (fromIndex <= lowerContent.length) {
+            const matchIndex = lowerContent.indexOf(lowerQuery, fromIndex);
+            if (matchIndex === -1) break;
+
+            editorSearchMatches.push(matchIndex);
+            fromIndex = matchIndex + Math.max(lowerQuery.length, 1);
+        }
+
+        updateEditorFindStatus();
+    }
+
+    function selectEditorSearchMatch(index, options = {}) {
+        const { focusEditor = true } = options;
+
+        if (editorSearchMatches.length === 0) {
+            updateEditorFindStatus();
+            return;
+        }
+
+        const query = editorFindInput.value;
+        editorSearchIndex = (index + editorSearchMatches.length) % editorSearchMatches.length;
+        const matchStart = editorSearchMatches[editorSearchIndex];
+        const matchEnd = matchStart + query.length;
+
+        const lineHeight = parseFloat(getComputedStyle(noteContentInput).lineHeight) || 22;
+        const textBeforeMatch = noteContentInput.value.slice(0, matchStart);
+        const lineIndex = textBeforeMatch.split('\n').length - 1;
+        const targetScrollTop = Math.max(0, (lineIndex * lineHeight) - (noteContentInput.clientHeight / 2));
+        noteContentInput.scrollTop = targetScrollTop;
+
+        if (focusEditor) {
+            noteContentInput.focus();
+            noteContentInput.setSelectionRange(matchStart, matchEnd);
+        }
+
+        updateEditorFindStatus();
+    }
+
+    function findEditorMatch(direction = 1) {
+        const query = editorFindInput.value;
+        collectEditorSearchMatches(query);
+
+        if (editorSearchMatches.length === 0) return;
+
+        const selectionStart = noteContentInput.selectionStart;
+        if (direction >= 0) {
+            const nextIndex = editorSearchMatches.findIndex(matchIndex => matchIndex >= selectionStart + (editorSearchIndex >= 0 ? 1 : 0));
+            selectEditorSearchMatch(nextIndex === -1 ? 0 : nextIndex);
+        } else {
+            let previousIndex = editorSearchMatches.length - 1;
+            for (let i = editorSearchMatches.length - 1; i >= 0; i--) {
+                if (editorSearchMatches[i] < selectionStart) {
+                    previousIndex = i;
+                    break;
+                }
+            }
+            selectEditorSearchMatch(previousIndex);
+        }
+    }
+
+    function openEditorFindBar() {
+        editorFindBar.hidden = false;
+        const selectedText = noteContentInput.value.slice(noteContentInput.selectionStart, noteContentInput.selectionEnd);
+        if (selectedText && !selectedText.includes('\n')) {
+            editorFindInput.value = selectedText;
+        }
+        editorFindInput.focus();
+        editorFindInput.select();
+        collectEditorSearchMatches(editorFindInput.value);
+        if (editorFindInput.value) findEditorMatch(1);
+    }
+
+    function closeEditorFindBar() {
+        editorFindBar.hidden = true;
+        editorSearchMatches = [];
+        editorSearchIndex = -1;
+        noteContentInput.focus();
+    }
+
+    function runEditorCommand(command) {
+        noteContentInput.focus();
+        document.execCommand(command);
+        if (command === 'cut' || command === 'paste' || command === 'undo') {
+            noteContentInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+    }
+
+    async function pasteTextIntoEditor() {
+        noteContentInput.focus();
+
+        try {
+            if (navigator.clipboard?.readText) {
+                const text = await navigator.clipboard.readText();
+                const { selectionStart, selectionEnd, value } = noteContentInput;
+                noteContentInput.value = `${value.slice(0, selectionStart)}${text}${value.slice(selectionEnd)}`;
+                const caret = selectionStart + text.length;
+                noteContentInput.setSelectionRange(caret, caret);
+                noteContentInput.dispatchEvent(new Event('input', { bubbles: true }));
+                return;
+            }
+        } catch (error) {
+            console.warn('读取剪贴板失败，回退到浏览器粘贴命令:', error);
+        }
+
+        runEditorCommand('paste');
+    }
+
+    function hideEditorContextMenu() {
+        editorContextMenu.style.display = 'none';
+    }
+
+    function updateEditorContextMenuState() {
+        const hasSelection = noteContentInput.selectionStart !== noteContentInput.selectionEnd;
+        editorContextCut.classList.toggle('disabled', !hasSelection);
+        editorContextCopy.classList.toggle('disabled', !hasSelection);
+    }
+
+    function showEditorContextMenu(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        customContextMenu.style.display = 'none';
+        updateEditorContextMenuState();
+
+        editorContextMenu.style.left = `${e.clientX}px`;
+        editorContextMenu.style.top = `${e.clientY}px`;
+        editorContextMenu.style.display = 'block';
+    }
+
+    editorFindInput.addEventListener('input', () => {
+        collectEditorSearchMatches(editorFindInput.value);
+        if (editorSearchMatches.length > 0) {
+            selectEditorSearchMatch(0, { focusEditor: false });
+            editorFindInput.focus();
+        }
+    });
+
+    editorFindInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            findEditorMatch(e.shiftKey ? -1 : 1);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            closeEditorFindBar();
+        }
+    });
+
+    editorFindPrev.addEventListener('click', () => findEditorMatch(-1));
+    editorFindNext.addEventListener('click', () => findEditorMatch(1));
+    editorFindClose.addEventListener('click', closeEditorFindBar);
+
+    noteContentInput.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+            e.preventDefault();
+            openEditorFindBar();
+        } else if (e.key === 'Escape' && !editorFindBar.hidden) {
+            e.preventDefault();
+            closeEditorFindBar();
+        }
+    });
+
+    noteContentInput.addEventListener('contextmenu', showEditorContextMenu);
+
+    editorContextUndo.addEventListener('click', () => {
+        runEditorCommand('undo');
+        hideEditorContextMenu();
+    });
+
+    editorContextCut.addEventListener('click', () => {
+        if (!editorContextCut.classList.contains('disabled')) runEditorCommand('cut');
+        hideEditorContextMenu();
+    });
+
+    editorContextCopy.addEventListener('click', () => {
+        if (!editorContextCopy.classList.contains('disabled')) runEditorCommand('copy');
+        hideEditorContextMenu();
+    });
+
+    editorContextPaste.addEventListener('click', async () => {
+        await pasteTextIntoEditor();
+        hideEditorContextMenu();
+    });
+
+    editorContextSelectAll.addEventListener('click', () => {
+        noteContentInput.focus();
+        noteContentInput.select();
+        hideEditorContextMenu();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (isEditorFocused() && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+            e.preventDefault();
+            openEditorFindBar();
+        }
+    }, true);
 
     noteTitleInput.addEventListener('input', debouncedSaveNote);
     noteContentInput.addEventListener('input', (e) => {
@@ -801,23 +1224,30 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function handleListDragStart(e) {
         const dragElement = e.target.closest('li[draggable="true"]');
-        if (!dragElement) {
+        if (!dragElement || !noteList.contains(dragElement)) {
             e.preventDefault();
             return;
         }
+
+        // Reset stale drag state from any previous interrupted drag.
+        cleanupDragOverVisuals();
+        dragState.sourceIds = null;
+        dragState.dropAction = null;
+        dragState.pendingDragOverEvent = null;
+        dragState.lastPointer = null;
+        if (dragState.rafId) {
+            cancelAnimationFrame(dragState.rafId);
+            dragState.rafId = null;
+        }
+        stopDragAutoScroll();
     
         const id = dragElement.dataset.id;
         // PERFORMANCE FIX: Manually update selection instead of re-rendering the whole tree.
         if (!selectedItems.has(id)) {
-            // Clear previous selection visuals
-            noteList.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
             selectedItems.clear();
-            
-            // Select the new item
-            const itemContainer = dragElement.matches('.note-item') ? dragElement : dragElement.querySelector('.folder-header-row');
-            if(itemContainer) itemContainer.classList.add('selected');
             selectedItems.add(id);
             activeItemId = id;
+            updateSelectionVisuals();
         }
     
         dragState.sourceIds = Array.from(selectedItems);
@@ -826,7 +1256,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
         // Immediately add dragging class synchronously for snappier visual feedback
         dragState.sourceIds.forEach(selectedId => {
-            const el = noteList.querySelector(`li[data-id='${selectedId}']`);
+            const el = noteList.querySelector(`li[data-id="${CSS.escape(selectedId)}"]`);
             if (el) el.classList.add('dragging');
         });
         
@@ -843,79 +1273,209 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    const throttledUpdateDragOverVisuals = throttle((targetElement, event) => {
-        // RACE CONDITION FIX: If drag has already ended, sourceIds will be null. Do nothing.
-        if (!dragState.sourceIds) {
-            return;
-        }
- 
-        // Clear previous target's visuals
-        if (dragState.lastDragOverElement && dragState.lastDragOverElement !== targetElement) {
-            dragState.lastDragOverElement.classList.remove('drag-over-folder', 'drag-over-target-top', 'drag-over-target-bottom');
-        }
-        dragState.lastDragOverElement = targetElement;
-        dragState.dropAction = null; // Reset action
-    
-        // Prevent dropping onto itself or its children (if dragging a folder)
-        if (dragState.sourceIds.includes(targetElement.dataset.id)) {
-            return;
-        }
-    
-        const rect = targetElement.getBoundingClientRect();
-        const isFolder = targetElement.dataset.type === 'folder';
-        const isNearTop = (event.clientY - rect.top) < (rect.height / 2);
-    
-        // Determine drop action based on position
-        if (isFolder) {
-            const dropIntoThreshold = rect.height * 0.25; // 25% margin top/bottom for reordering
-            if (event.clientY - rect.top < dropIntoThreshold) {
-                dragState.dropAction = 'before';
-            } else if (rect.bottom - event.clientY < dropIntoThreshold) {
-                dragState.dropAction = 'after';
-            } else {
-                dragState.dropAction = 'inside';
-            }
-        } else {
-            dragState.dropAction = isNearTop ? 'before' : 'after';
-        }
-    
-        // Apply visuals based on the determined action
-        targetElement.classList.toggle('drag-over-folder', dragState.dropAction === 'inside');
-        targetElement.classList.toggle('drag-over-target-top', dragState.dropAction === 'before');
-        targetElement.classList.toggle('drag-over-target-bottom', dragState.dropAction === 'after');
-    
-    }, 16);
-
-    function handleListDragOver(e) {
-        e.preventDefault(); // Necessary to allow for dropping
-        e.dataTransfer.dropEffect = 'move'; // 明确指示移动操作
-
-        // 缓存 closest 查询结果 on the target to avoid repeated DOM traversal
-        if (!e.target._cachedDraggable) {
-            e.target._cachedDraggable = e.target.closest('li[draggable="true"]');
-        }
-        const targetElement = e.target._cachedDraggable;
-
-        if (targetElement) {
-            throttledUpdateDragOverVisuals(targetElement, e);
+    function stopDragAutoScroll() {
+        if (dragState.autoScrollFrameId) {
+            cancelAnimationFrame(dragState.autoScrollFrameId);
+            dragState.autoScrollFrameId = null;
         }
     }
 
-function handleListDragLeave(e) {
-    // When leaving a specific item, remove its visuals
-    const targetElement = e.target.closest('li[draggable="true"]');
-    
-    // 只有当鼠标真正离开了整个列表项时才清理
-    if (targetElement && dragState.lastDragOverElement === targetElement) {
-        // 检查相关目标是否仍在同一个列表项内
-        const relatedTarget = e.relatedTarget;
-        const stillInSameItem = relatedTarget && targetElement.contains(relatedTarget);
-        
-        if (!stillInSameItem) {
-            dragState.lastDragOverElement.classList.remove('drag-over-folder', 'drag-over-target-top', 'drag-over-target-bottom');
-            dragState.lastDragOverElement = null;
-            dragState.dropAction = null;
+    function updateDragAutoScroll(clientY) {
+        if (!dragState.sourceIds) {
+            stopDragAutoScroll();
+            return;
         }
+
+        dragState.lastPointer = {
+            ...(dragState.lastPointer || {}),
+            clientY
+        };
+
+        if (dragState.autoScrollFrameId) return;
+
+        const scrollStep = () => {
+            dragState.autoScrollFrameId = null;
+
+            if (!dragState.sourceIds || !dragState.lastPointer) return;
+
+            const listRect = noteList.getBoundingClientRect();
+            const threshold = 56;
+            const maxSpeed = 18;
+            const { clientX, clientY: pointerY } = dragState.lastPointer;
+            let speed = 0;
+
+            if (pointerY < listRect.top + threshold) {
+                speed = -Math.ceil(((listRect.top + threshold - pointerY) / threshold) * maxSpeed);
+            } else if (pointerY > listRect.bottom - threshold) {
+                speed = Math.ceil(((pointerY - (listRect.bottom - threshold)) / threshold) * maxSpeed);
+            }
+
+            if (speed !== 0) {
+                noteList.scrollTop += speed;
+
+                // After scrolling, the element under the pointer changes even if dragover does not fire.
+                // Recalculate the target from viewport coordinates so top -> bottom dragging remains reliable.
+                if (typeof clientX === 'number') {
+                    scheduleDragOverUpdateFromPoint(clientX, pointerY);
+                }
+
+                dragState.autoScrollFrameId = requestAnimationFrame(scrollStep);
+            }
+        };
+
+        dragState.autoScrollFrameId = requestAnimationFrame(scrollStep);
+    }
+
+    function cleanupDragOverVisuals() {
+        if (dragState.lastDragOverVisualElement) {
+            dragState.lastDragOverVisualElement.classList.remove('drag-over-folder', 'drag-over-target-top', 'drag-over-target-bottom');
+        }
+        dragState.lastDragOverElement = null;
+        dragState.lastDragOverVisualElement = null;
+        dragState.dropAction = null;
+    }
+
+    function getRowItemElement(row) {
+        if (!row || !noteList.contains(row)) return null;
+        return row.matches('.note-item') ? row : row.closest('li.folder-item');
+    }
+
+    function isInvalidDropTarget(targetElement) {
+        if (!dragState.sourceIds || !targetElement) return true;
+
+        const targetId = targetElement.dataset.id;
+        if (dragState.sourceIds.includes(targetId)) return true;
+
+        // Prevent dropping a folder into one of its own descendants.
+        return dragState.sourceIds.some(sourceId => {
+            const sourceElement = noteList.querySelector(`li[data-id="${CSS.escape(sourceId)}"]`);
+            return sourceElement && sourceElement !== targetElement && sourceElement.contains(targetElement);
+        });
+    }
+
+    function getVisibleDropRows() {
+        const listRect = noteList.getBoundingClientRect();
+        return Array.from(noteList.querySelectorAll('.note-item, .folder-header-row'))
+            .map(row => {
+                const itemElement = getRowItemElement(row);
+                const rect = row.getBoundingClientRect();
+                return { row, itemElement, rect };
+            })
+            .filter(entry => {
+                const { itemElement, rect } = entry;
+                return itemElement
+                    && itemElement.matches('li[draggable="true"]')
+                    && rect.bottom >= listRect.top
+                    && rect.top <= listRect.bottom
+                    && !isInvalidDropTarget(itemElement);
+            });
+    }
+
+    function computeDropIntentFromPoint(clientX, clientY) {
+        if (!dragState.sourceIds) return null;
+
+        const element = document.elementFromPoint(clientX, clientY);
+        const directRow = element?.closest('.note-item, .folder-header-row');
+        const directItem = getRowItemElement(directRow);
+
+        // Only a direct hit on the folder header can become "inside".
+        if (directRow && directItem && !isInvalidDropTarget(directItem) && directItem.dataset.type === 'folder') {
+            const rect = directRow.getBoundingClientRect();
+            const offsetY = clientY - rect.top;
+            const insideThreshold = Math.max(6, rect.height * 0.28);
+
+            if (offsetY >= insideThreshold && (rect.bottom - clientY) >= insideThreshold) {
+                return {
+                    targetElement: directItem,
+                    visualElement: directRow,
+                    dropAction: 'inside'
+                };
+            }
+        }
+
+        const rows = getVisibleDropRows();
+        if (rows.length === 0) return null;
+
+        // Reorder by row center, not by "nearest row". This makes downward moves deterministic:
+        // pointer below a row center means "after" that row, not "before the nearest lower row".
+        let candidate = rows[rows.length - 1];
+        let action = 'after';
+
+        for (const entry of rows) {
+            const centerY = entry.rect.top + entry.rect.height / 2;
+            if (clientY < centerY) {
+                candidate = entry;
+                action = 'before';
+                break;
+            }
+        }
+
+        return {
+            targetElement: candidate.itemElement,
+            visualElement: candidate.row,
+            dropAction: action
+        };
+    }
+
+    function applyDropIntentVisuals(intent) {
+        if (!dragState.sourceIds) return;
+
+        if (!intent) {
+            cleanupDragOverVisuals();
+            return;
+        }
+
+        const { targetElement, visualElement, dropAction } = intent;
+
+        if (dragState.lastDragOverVisualElement && dragState.lastDragOverVisualElement !== visualElement) {
+            dragState.lastDragOverVisualElement.classList.remove('drag-over-folder', 'drag-over-target-top', 'drag-over-target-bottom');
+        }
+
+        dragState.lastDragOverElement = targetElement;
+        dragState.lastDragOverVisualElement = visualElement;
+        dragState.dropAction = dropAction;
+
+        visualElement.classList.toggle('drag-over-folder', dropAction === 'inside');
+        visualElement.classList.toggle('drag-over-target-top', dropAction === 'before');
+        visualElement.classList.toggle('drag-over-target-bottom', dropAction === 'after');
+    }
+
+    function scheduleDragOverUpdateFromPoint(clientX, clientY) {
+        const intent = computeDropIntentFromPoint(clientX, clientY);
+
+        dragState.pendingDragOverEvent = intent;
+
+        if (dragState.rafId) return;
+
+        dragState.rafId = requestAnimationFrame(() => {
+            dragState.rafId = null;
+            const pending = dragState.pendingDragOverEvent;
+            dragState.pendingDragOverEvent = null;
+            applyDropIntentVisuals(pending);
+        });
+    }
+
+    function scheduleDragOverUpdate(e) {
+        dragState.lastPointer = {
+            clientX: e.clientX,
+            clientY: e.clientY
+        };
+        scheduleDragOverUpdateFromPoint(e.clientX, e.clientY);
+    }
+
+    function handleListDragOver(e) {
+        e.preventDefault(); // Necessary to allow for dropping
+        if (!dragState.sourceIds) return;
+
+        e.dataTransfer.dropEffect = 'move'; // 明确指示移动操作
+        updateDragAutoScroll(e.clientY);
+        scheduleDragOverUpdate(e);
+    }
+
+function handleListDragLeave(e) {
+    if (!noteList.contains(e.relatedTarget)) {
+        cleanupDragOverVisuals();
+        stopDragAutoScroll();
     }
 }
 
@@ -924,14 +1484,22 @@ async function handleListDrop(e) {
     e.stopPropagation();
 
     // Keep local references to avoid race conditions if dragState is mutated elsewhere.
-    const dropTargetElement = dragState.lastDragOverElement;
-    const dropAction = dragState.dropAction;
+    let dropTargetElement = dragState.lastDragOverElement;
+    let dropAction = dragState.dropAction;
     const sourceIds = Array.isArray(dragState.sourceIds) ? [...dragState.sourceIds] : null;
 
-    // --- Cleanup visuals first ---
-    if (dropTargetElement) {
-        dropTargetElement.classList.remove('drag-over-folder', 'drag-over-target-top', 'drag-over-target-bottom');
+    // Always recompute at drop time. Dragover can be stale after auto-scroll, and using the stale
+    // target is exactly what caused "drag down but move up / only move a little".
+    if (dragState.lastPointer) {
+        const finalIntent = computeDropIntentFromPoint(dragState.lastPointer.clientX, dragState.lastPointer.clientY);
+        if (finalIntent) {
+            dropTargetElement = finalIntent.targetElement;
+            dropAction = finalIntent.dropAction;
+        }
     }
+
+    // --- Cleanup visuals first ---
+    cleanupDragOverVisuals();
     
     // --- Validate Drop ---
     if (!dropTargetElement || !dropAction || !sourceIds || sourceIds.length === 0) {
@@ -1001,24 +1569,31 @@ async function handleListDrop(e) {
 }
 
 function handleListDragEnd(e) {
-    // Prevent double execution: if there is no sourceIds and no lastDragOverElement, nothing to do.
-    if (!dragState.sourceIds && !dragState.lastDragOverElement) return;
+    // Prevent double execution if the drag was already fully cleaned.
+    if (!dragState.sourceIds && !dragState.lastDragOverElement && !dragState.lastDragOverVisualElement && !dragState.rafId) return;
+
+    if (dragState.rafId) {
+        cancelAnimationFrame(dragState.rafId);
+    }
+    stopDragAutoScroll();
 
     // Clear dragging classes
     noteList.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
 
     // Clear drag over visuals
-    if (dragState.lastDragOverElement) {
-        dragState.lastDragOverElement.classList.remove('drag-over-folder', 'drag-over-target-top', 'drag-over-target-bottom');
-    }
+    cleanupDragOverVisuals();
 
     // Reset drag state
-    dragState = { sourceIds: null, lastDragOverElement: null, dropAction: null };
-
-    // 更彻底地清理缓存（改进版）
-    noteList.querySelectorAll('[_cachedDraggable]').forEach(el => {
-        delete el._cachedDraggable;
-    });
+    dragState = {
+        sourceIds: null,
+        lastDragOverElement: null,
+        lastDragOverVisualElement: null,
+        dropAction: null,
+        rafId: null,
+        autoScrollFrameId: null,
+        pendingDragOverEvent: null,
+        lastPointer: null,
+    };
 
     // Re-enable global selection listener only if it was active before the drag.
     if (api && api.toggleSelectionListener) {
@@ -1040,7 +1615,8 @@ function handleListDragEnd(e) {
             selectedItems.clear();
             selectedItems.add(item.id);
             activeItemId = item.id;
-            renderTree();
+            // PERFORMANCE: Only repaint selection state instead of rebuilding the tree.
+            updateSelectionVisuals();
         }
 
         const menu = document.getElementById('customContextMenu');
@@ -1081,9 +1657,24 @@ function handleListDragEnd(e) {
         };
     }
 
-    document.addEventListener('click', () => {
-        customContextMenu.style.display = 'none';
-    });
+    // Hide context menu reliably even when item click handlers stop propagation.
+    document.addEventListener('click', (e) => {
+        if (!customContextMenu.contains(e.target)) {
+            customContextMenu.style.display = 'none';
+        }
+        if (!editorContextMenu.contains(e.target)) {
+            hideEditorContextMenu();
+        }
+    }, true);
+
+    document.addEventListener('contextmenu', (e) => {
+        if (!e.target.closest('#noteList [data-id]') && !customContextMenu.contains(e.target)) {
+            customContextMenu.style.display = 'none';
+        }
+        if (!e.target.closest('#noteContent') && !editorContextMenu.contains(e.target)) {
+            hideEditorContextMenu();
+        }
+    }, true);
 
     function startInlineRename(itemId) {
         const item = findItemById(getCombinedTree(), itemId);
@@ -1250,6 +1841,70 @@ function handleListDragEnd(e) {
         resizer.addEventListener('mousedown', mouseDownHandler);
     }
 
+    // --- Editor / Preview Split Resizer Logic ---
+    function initEditorPreviewResizer() {
+        if (!noteBody || !editorContainer || !previewContainer || !editorPreviewResizer) return;
+
+        const minPercent = 20;
+        const maxPercent = 80;
+        const storageKey = 'notesEditorPreviewSplitPercent';
+
+        const clampPercent = (value) => Math.min(maxPercent, Math.max(minPercent, value));
+
+        const notifyLayoutChanged = () => {
+            if (window.pretextBridge && window.pretextBridge.isReady()) {
+                window.pretextBridge.recalculateAll(window.innerWidth);
+            }
+        };
+
+        const applySplit = (percent) => {
+            const safePercent = clampPercent(Number(percent) || 50);
+            const editorBasis = `calc(${safePercent}% - 14px)`;
+            const previewBasis = `calc(${100 - safePercent}% - 14px)`;
+
+            editorContainer.style.flex = `0 0 ${editorBasis}`;
+            previewContainer.style.flex = `0 0 ${previewBasis}`;
+            editorPreviewResizer.setAttribute('aria-valuenow', String(Math.round(safePercent)));
+            editorPreviewResizer.setAttribute('aria-valuemin', String(minPercent));
+            editorPreviewResizer.setAttribute('aria-valuemax', String(maxPercent));
+
+            requestAnimationFrame(notifyLayoutChanged);
+        };
+
+        const savedPercent = parseFloat(localStorage.getItem(storageKey));
+        applySplit(Number.isFinite(savedPercent) ? savedPercent : 50);
+
+        const mouseMoveHandler = (e) => {
+            const rect = noteBody.getBoundingClientRect();
+            if (rect.width <= 0) return;
+
+            const percent = clampPercent(((e.clientX - rect.left) / rect.width) * 100);
+            applySplit(percent);
+        };
+
+        const mouseUpHandler = (e) => {
+            noteBody.classList.remove('is-resizing');
+            document.removeEventListener('mousemove', mouseMoveHandler);
+            document.removeEventListener('mouseup', mouseUpHandler);
+
+            const rect = noteBody.getBoundingClientRect();
+            if (rect.width > 0) {
+                const percent = clampPercent(((e.clientX - rect.left) / rect.width) * 100);
+                localStorage.setItem(storageKey, String(Math.round(percent * 10) / 10));
+                applySplit(percent);
+            }
+        };
+
+        editorPreviewResizer.addEventListener('mousedown', (e) => {
+            if (document.body.classList.contains('preview-collapsed')) return;
+
+            e.preventDefault();
+            noteBody.classList.add('is-resizing');
+            document.addEventListener('mousemove', mouseMoveHandler);
+            document.addEventListener('mouseup', mouseUpHandler);
+        });
+    }
+
     // --- Initialization ---
     async function initializeApp() {
         // Initialize theme first to prevent flash of unstyled content
@@ -1268,6 +1923,7 @@ function handleListDragEnd(e) {
         }
 
         initResizer();
+        initEditorPreviewResizer();
         searchInput.addEventListener('input', debounce(renderTree, 300));
         
         // 监听全局布局变化
@@ -1278,6 +1934,11 @@ function handleListDragEnd(e) {
         });
 
         // --- Custom Title Bar Listeners ---
+        const isPreviewCollapsed = localStorage.getItem('notesPreviewCollapsed') === 'true';
+        updatePreviewToggleState(isPreviewCollapsed);
+
+        previewToggleBtn.addEventListener('click', togglePreviewPanel);
+
         minimizeNotesBtn.addEventListener('click', () => {
             if (api) api.minimizeWindow();
         });
@@ -1351,6 +2012,11 @@ function handleListDragEnd(e) {
             // Ensure it's always an array, handling both old object format and null/undefined
             networkNoteTree = Array.isArray(freshNetworkTree) ? freshNetworkTree : (freshNetworkTree ? [freshNetworkTree] : []);
             renderTree(); // Re-render with the fresh data
+        });
+
+        // 6. Listen for local note tree changes so external file drops appear immediately.
+        api.onLocalNotesChanged?.(() => {
+            loadNoteTree();
         });
 
         api.onSharedNoteData(async (data) => {

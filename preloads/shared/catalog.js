@@ -9,6 +9,8 @@ function createCatalog(ops) {
         // Shared shell/config/theme helpers
         loadSettings: query(() => ops.invoke('load-settings')),
         loadWebindexModels: query(() => ops.invoke('load-webindex-models')),
+        loadTranslatorSettings: query(() => ops.invoke('load-translator-settings')),
+        saveTranslatorSettings: query((settings) => ops.invoke('save-translator-settings', settings)),
         saveSettings: query((settings) => ops.invoke('save-settings', settings)),
         saveUserAvatar: query((avatarData) => ops.invoke('save-user-avatar', avatarData)),
         saveAvatarColor: query((data) => ops.invoke('save-avatar-color', data)),
@@ -61,6 +63,7 @@ function createCatalog(ops) {
         openVoiceChatWindow: command((data) => ops.send('open-voice-chat-window', data)),
         openForumWindow: command(() => ops.send('open-forum-window')),
         openMemoWindow: command(() => ops.send('open-memo-window')),
+        openLogWindow: command(() => ops.send('open-log-window')),
         openMusicWindow: command(() => ops.send('open-music-window')),
         openDiceWindow: query(() => ops.invoke('open-dice-window')),
         openCanvasWindow: query(() => ops.invoke('open-canvas-window')),

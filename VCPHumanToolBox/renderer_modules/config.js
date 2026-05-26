@@ -1,4 +1,4 @@
-// renderer_modules/config.js
+﻿// renderer_modules/config.js
 // VCPHumanToolBox工具定义
 // 最后更新: 2026-04-21by CodeCC &赵枫
 // 备份: config.js.bak.20260421
@@ -19,6 +19,23 @@ export const tools = {
             { name: 'steps', type: 'number', required: false, placeholder: '推荐8-20步' },
             { name: 'showbase64', type: 'checkbox', required: false, default: false }
         ]
+    },
+    'ZImageTurboGen': {
+        displayName: 'Z-Image-Turbo 生图',
+        description: '使用 Gitee 提供的 Z-Image-Turbo 生成图片。支持 1k 和 2k 高清分辨率，支持中文和英文提示词。[后端插件: ZImageTurboGen]',
+        commands: {
+            'GenerateImage': {
+                description: '生成图片',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'prompt', type: 'textarea', required: true, placeholder: '(必需) 用于图片生成的详细提示词，支持中文或英文。' },
+                    { name: 'size', type: 'select', required: false, options: ['1024x1024', '1024x768', '768x1024', '1024x576', '576x1024', '2048x2048', '2048x1536', '1536x2048', '2048x1152', '1152x2048', '2048x1280', '1280x2048'], default: '1024x1024', description: '图片分辨率或比例' },
+                    { name: 'negative_prompt', type: 'textarea', required: false, placeholder: '(可选) 负面提示词，描述不希望在图片中出现的内容，例如 "模糊, 低质量, 变形"。' },
+                    { name: 'num_inference_steps', type: 'number', required: false, min: 4, max: 25, default: 9, placeholder: '推理步数，范围 4-25，默认 9' },
+                    { name: 'seed', type: 'number', required: false, default: 0, placeholder: '随机种子，默认 0' }
+                ]
+            }
+        }
     },
     'FluxGen': {
         displayName:'Flux 图片生成',
@@ -339,7 +356,7 @@ export const tools = {
         params: [
             { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
             { name: 'url', type: 'text', required: true, placeholder: 'https://example.com' },
-            { name: 'mode', type: 'select', required: false, options: ['text', 'snapshot'] }
+            { name: 'mode', type: 'select', required: false, options: ['text', 'snapshot', 'jina', 'image'] }
         ]
     },
     'BilibiliFetch': {
@@ -808,16 +825,66 @@ export const tools = {
             }
         }
     },
-    'AgentTopicCreator': {
-        displayName: '话题发起人',
-        description: '发起一个全新的聊天话题。',
+    'TopicSponsor': {
+        displayName: '话题发起人 (TopicSponsor)',
+        description: '发起、查询和管理聊天话题。[前端分布式插件: TopicSponsor]',
         commands: {
             'CreateTopic': {
-                description: '创建新话题',
+                description: '创建新话题并发起对话',
                 params: [
                     { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
-                    { name: 'topic_name', type: 'text', required: true },
-                    { name: 'initial_message', type: 'textarea', required: true }
+                    { name: 'topic_name', type: 'text', required: true, placeholder: '话题名称' },
+                    { name: 'initial_message', type: 'textarea', required: true, placeholder: '第一句话' }
+                ]
+            },
+            'ReadUnlockedTopics': {
+                description: '读取未锁定话题及消息历史',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'include_read', type: 'select', options: ['false','true'], description: '是否包含已读' }
+                ]
+            },
+            'CheckNewTopics': {
+                description: '检查最近几天的新话题',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'days', type: 'number', required: false, placeholder: '3' }
+                ]
+            },
+            'CheckUnreadMessages': {
+                description: '检查未读消息',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' }
+                ]
+            },
+            'ReplyToTopic': {
+                description: '在话题中回复消息',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'topic_id', type: 'text', required: true, placeholder: 'topic_xxx' },
+                    { name: 'message', type: 'textarea', required: true },
+                    { name: 'sender_name', type: 'text', required: true, placeholder: '发送者名' }
+                ]
+            },
+            'CheckTopicOwnership': {
+                description: '验证话题所有权',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'topic_id', type: 'text', required: true, placeholder: 'topic_xxx' },
+                    { name: 'caller_name', type: 'text', required: true, placeholder: '调用者名' }
+                ]
+            },
+            'ListUnlockedTopics': {
+                description: '列出所有未锁定话题',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' }
+                ]
+            },
+            'ReadTopicContent': {
+                description: '读取话题完整内容',
+                params: [
+                    { name: 'maid', type: 'text', required: true, placeholder: '你的名字' },
+                    { name: 'topic_id', type: 'text', required: true, placeholder: 'topic_xxx' }
                 ]
             }
         }

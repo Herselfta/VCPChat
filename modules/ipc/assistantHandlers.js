@@ -16,13 +16,14 @@ let assistantBarWindowReadyPromises = [];  // ⏱️ 等待 ready 的 resolve �
 let selectionUpdateToken = 0;
 let assistantBarHideRequestId = 0;
 let lastAssistantBarShownAt = 0;
-const ASSISTANT_BAR_HIDE_GRACE_MS = 280;
-const ASSISTANT_BAR_GLOBAL_HIDE_DELAY_MS = 260;
-const ASSISTANT_BAR_ANIMATION_MS = 200;
+const ASSISTANT_BAR_HIDE_GRACE_MS = 1500;
+const ASSISTANT_BAR_GLOBAL_HIDE_DELAY_MS = 60;
+const ASSISTANT_BAR_ANIMATION_MS = 80;
 let lastProcessedSelection = '';
 let selectionListenerActive = false;
 let mouseListener = null;
 let hideBarTimeout = null;
+let assistantBarOutsideWatcher = null;
 let SETTINGS_FILE;
 let isWindowHidingInProgress = false;
 let rustHealthMonitorTimer = null;
@@ -339,6 +340,7 @@ function processSelectedText(selectionData) {
         // 启动全局鼠标监听器作为备选方案
         // Rust 模式下虽然 sidecar 会发送空选区事件，但添加双重保障
         startGlobalMouseListener();
+        startAssistantBarOutsideClickWatcher();
     });
 }
 
@@ -775,28 +777,8 @@ function startGlobalMouseListener() {
             if (isMouseDown) {
                 if (hideBarTimeout) clearTimeout(hideBarTimeout);
                 hideBarTimeout = setTimeout(() => {
-                    const shouldHide = (Date.now() - lastAssistantBarShownAt) >= ASSISTANT_BAR_HIDE_GRACE_MS;
-                    if (shouldHide && assistantBarWindow && !assistantBarWindow.isDestroyed() && assistantBarWindow.isVisible()) {
-                        // 检查鼠标点击位置是否在助手栏窗口内
-                        try {
-                            const cursorPos = screen.getCursorScreenPoint();
-                            const barBounds = assistantBarWindow.getBounds();
-                            const isInBarBounds = 
-                                cursorPos.x >= barBounds.x && 
-                                cursorPos.x <= barBounds.x + barBounds.width &&
-                                cursorPos.y >= barBounds.y && 
-                                cursorPos.y <= barBounds.y + barBounds.height;
-                            
-                            if (!isInBarBounds) {
-                                console.log('[Assistant] Hiding bar due to global mouse click outside');
-                                hideAssistantBarWithAnimation('global-mouse-down');
-                            }
-                        } catch (boundsError) {
-                            // 如果无法获取边界，直接隐藏
-                            console.log('[Assistant] Hiding bar (bounds check failed)');
-                            hideAssistantBarWithAnimation('global-mouse-down');
-                        }
-                    }
+                    hideBarTimeout = null;
+                    hideAssistantBarIfPointerOutside('global-mouse-down');
                 }, ASSISTANT_BAR_GLOBAL_HIDE_DELAY_MS);
             }
         });
@@ -804,6 +786,73 @@ function startGlobalMouseListener() {
     } catch (error) {
         console.error('[Assistant] Failed to start global mouse listener:', error);
     }
+}
+
+function hideAssistantBarIfPointerOutside(reason = 'pointer-outside') {
+    const shouldHide = (Date.now() - lastAssistantBarShownAt) >= ASSISTANT_BAR_HIDE_GRACE_MS;
+    if (!shouldHide || !assistantBarWindow || assistantBarWindow.isDestroyed() || !assistantBarWindow.isVisible()) {
+        return;
+    }
+
+    try {
+        const cursorPos = screen.getCursorScreenPoint();
+        const barBounds = assistantBarWindow.getBounds();
+        const isInBarBounds =
+            cursorPos.x >= barBounds.x &&
+            cursorPos.x <= barBounds.x + barBounds.width &&
+            cursorPos.y >= barBounds.y &&
+            cursorPos.y <= barBounds.y + barBounds.height;
+
+        if (!isInBarBounds) {
+            console.log(`[Assistant] Hiding bar due to ${reason}`);
+            hideAssistantBarWithAnimation(reason);
+        }
+    } catch (boundsError) {
+        console.log(`[Assistant] Hiding bar (${reason}, bounds check failed)`);
+        hideAssistantBarWithAnimation(reason);
+    }
+}
+
+function startAssistantBarOutsideClickWatcher() {
+    if (assistantBarOutsideWatcher) {
+        return;
+    }
+
+    assistantBarOutsideWatcher = setInterval(() => {
+        if (!assistantBarWindow || assistantBarWindow.isDestroyed() || !assistantBarWindow.isVisible()) {
+            return;
+        }
+
+        const shouldHide = (Date.now() - lastAssistantBarShownAt) >= ASSISTANT_BAR_HIDE_GRACE_MS;
+        if (!shouldHide) {
+            return;
+        }
+
+        try {
+            const cursorPos = screen.getCursorScreenPoint();
+            const barBounds = assistantBarWindow.getBounds();
+            const isInBarBounds =
+                cursorPos.x >= barBounds.x &&
+                cursorPos.x <= barBounds.x + barBounds.width &&
+                cursorPos.y >= barBounds.y &&
+                cursorPos.y <= barBounds.y + barBounds.height;
+
+            if (!isInBarBounds) {
+                hideAssistantBarWithAnimation('pointer-outside-poll');
+            }
+        } catch (error) {
+            hideAssistantBarWithAnimation('pointer-outside-poll');
+        }
+    }, 60);
+}
+
+function stopAssistantBarOutsideClickWatcher() {
+    if (!assistantBarOutsideWatcher) {
+        return;
+    }
+
+    clearInterval(assistantBarOutsideWatcher);
+    assistantBarOutsideWatcher = null;
 }
 
 function prepareAssistantBarForShow() {
@@ -816,7 +865,7 @@ function prepareAssistantBarForShow() {
         (() => {
             const bar = document.getElementById('selection-assistant-bar');
             if (!bar) return;
-            bar.style.transition = 'opacity 0.2s ease-in-out, transform 0.2s ease-in-out';
+            bar.style.transition = 'opacity 0.09s ease-in-out, transform 0.09s ease-in-out';
             bar.style.opacity = '1';
             bar.style.transform = 'none';
         })();
@@ -824,6 +873,8 @@ function prepareAssistantBarForShow() {
 }
 
 function hideAssistantBarWithAnimation(reason = 'unknown') {
+    stopAssistantBarOutsideClickWatcher();
+
     if (!assistantBarWindow || assistantBarWindow.isDestroyed() || !assistantBarWindow.isVisible()) {
         return;
     }
@@ -845,7 +896,7 @@ function hideAssistantBarWithAnimation(reason = 'unknown') {
         (() => {
             const bar = document.getElementById('selection-assistant-bar');
             if (!bar) return false;
-            bar.style.transition = 'opacity 0.2s ease-in-out, transform 0.2s ease-in-out';
+            bar.style.transition = 'opacity 0.09s ease-in-out, transform 0.09s ease-in-out';
             bar.style.opacity = '0';
             bar.style.transform = 'translateY(10px)';
             return true;
@@ -872,24 +923,24 @@ async function waitForAssistantBarReady(timeoutMs = 3000) {
     
     // 创建 Promise 来等待 ready 事件
     return new Promise((resolve) => {
-        // 添加 resolve 函数到等待列表
-        assistantBarWindowReadyPromises.push(resolve);
-        
+        let settled = false;
+
+        const wrappedResolve = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            assistantBarWindowReadyPromises = assistantBarWindowReadyPromises.filter(item => item !== wrappedResolve);
+            resolve(result);
+        };
+
         // 设置超时：如果超时时间内 ready 事件未触发，仍然继续（降级处理）
         const timeoutId = setTimeout(() => {
             console.warn('[Assistant] Timeout waiting for assistant bar window to be ready. Proceeding anyway.');
-            resolve(false);
+            wrappedResolve(false);
         }, timeoutMs);
-        
-        // 当 resolve 被调用时，清除超时
-        const originalResolve = resolve;
-        const wrappedResolve = (result) => {
-            clearTimeout(timeoutId);
-            originalResolve(result);
-        };
-        
-        // 替换列表中的 resolve
-        assistantBarWindowReadyPromises[assistantBarWindowReadyPromises.length - 1] = wrappedResolve;
+
+        // 添加 resolve 函数到等待列表
+        assistantBarWindowReadyPromises.push(wrappedResolve);
     });
 }
 
@@ -900,6 +951,7 @@ function hideAssistantBarAndStopListener() {
         clearTimeout(hideBarTimeout);
         hideBarTimeout = null;
     }
+    stopAssistantBarOutsideClickWatcher();
     if (assistantBarWindow && !assistantBarWindow.isDestroyed() && assistantBarWindow.isVisible()) {
         hideAssistantBarWithAnimation('hide-and-stop-listener');
     }
@@ -1016,6 +1068,19 @@ function createAssistantBarWindow() {
     });
     
     assistantBarWindow.on('closed', () => {
+        stopAssistantBarOutsideClickWatcher();
+        if (hideBarTimeout) {
+            clearTimeout(hideBarTimeout);
+            hideBarTimeout = null;
+        }
+        const pendingReadyResolvers = assistantBarWindowReadyPromises.splice(0);
+        pendingReadyResolvers.forEach(resolve => {
+            try {
+                resolve(false);
+            } catch (error) {
+                console.warn('[Assistant] Failed to resolve pending assistant bar readiness waiter:', error.message || error);
+            }
+        });
         assistantBarWindow = null;
         assistantBarWindowReady = false;  // 重置 ready 状态
     });
