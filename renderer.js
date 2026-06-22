@@ -10,6 +10,8 @@ let globalSettings = {
     doNotDisturbLogMode: false, // 勿扰模式状态（已废弃，保留兼容性）
     filterEnabled: false, // 过滤总开关状态
     filterRules: [], // 过滤规则列表
+    toolAutoApprovalEnabled: false, // 工具调用默认允许总开关
+    toolAutoApprovalRules: [], // 工具调用默认允许规则列表
     enableRegenerateConfirmation: true, // 重新回复确认机制开关
     flowlockContinueDelay: 5, // 心流锁续写延迟（秒）
     enableThoughtChainInjection: false, // 元思考注入上下文开关
@@ -1211,6 +1213,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
                 uiHelper: uiHelperFunctions,
                 refs: {
                     currentSelectedItemRef: { get: () => currentSelectedItem },
+                    currentTopicIdRef: { get: () => currentTopicId },
                 },
                 modules: {
                     chatManager: window.chatManager,
@@ -2253,14 +2256,7 @@ if (window.marked && typeof window.marked.Marked === 'function') { // Ensure Mar
             pedantic: false,        // 不使用严格的 Markdown 规则
             sanitize: false,        // 不清理 HTML（允许内嵌 HTML）
             smartLists: true,       // 使用更智能的列表行为
-            smartypants: false,     // 不使用智能标点符号
-            highlight: function(code, lang) {
-                if (window.hljs) {
-                    const language = window.hljs.getLanguage(lang) ? lang : 'plaintext';
-                    return window.hljs.highlight(code, { language }).value;
-                }
-                return code; // Fallback for safety
-            }
+            smartypants: false      // 不使用智能标点符号
         });
         // Optional: Add custom processing like quote spans if needed
     } catch (err) {

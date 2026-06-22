@@ -18,18 +18,21 @@
     "Electron"
   ],
   "author": "莱恩 (由小吉辅助生成)",
-  "license": "MIT",
+  "license": "CC BY-NC-SA 4.0",
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
-    "electron": "^37.2.6",
+    "electron": "^41.7.1",
     "electron-builder": "^26.0.12",
     "node-addon-api": "^8.3.1",
     "node-gyp": "^11.4.2"
   },
   "dependencies": {
     "@3d-dice/dice-box": "^1.1.4",
+    "@chenglou/pretext": "^0.0.7",
+    "@xterm/headless": "^6.0.0",
     "animejs": "^4.0.2",
     "axios": "^1.10.0",
+    "better-sqlite3": "^12.10.0",
     "cheerio": "^1.1.2",
     "child_process": "^1.0.2",
     "chokidar": "^4.0.3",
@@ -54,7 +57,6 @@
     "morphdom": "^2.7.7",
     "music-metadata": "^11.4.0",
     "node-fetch": "^3.3.2",
-    "node-global-key-listener": "^0.3.0",
     "node-pty": "^1.1.0-beta37",
     "node-schedule": "^2.1.1",
     "os": "^0.1.2",

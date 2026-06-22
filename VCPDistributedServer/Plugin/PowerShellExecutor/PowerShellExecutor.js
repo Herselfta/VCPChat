@@ -127,14 +127,51 @@ ipcMain.on('copy-to-clipboard', (event, text) => {
     }
 });
 
+// 监听来自GUI的粘贴请求
+ipcMain.handle('read-from-clipboard', () => {
+    return clipboard.readText();
+});
+
 // 监听来自GUI的尺寸调整请求
 ipcMain.on('powershell-resize', (event, { cols, rows }) => {
+    const normalizedCols = Number(cols);
+    const normalizedRows = Number(rows);
+
+    if (Number.isInteger(normalizedCols) && Number.isInteger(normalizedRows) && normalizedCols > 0 && normalizedRows > 0) {
+        lastKnownSize = { cols: normalizedCols, rows: normalizedRows };
+    }
+
     if (ptyProcess) {
         try {
-            ptyProcess.resize(cols, rows);
+            ptyProcess.resize(lastKnownSize.cols, lastKnownSize.rows);
         } catch (e) {
             console.error('[PowerShellExecutor] Failed to resize pty:', e);
         }
+    }
+});
+
+// 监听来自GUI的真实终端输入透传。
+// 安全声明：此通道等价于用户直接操作本机终端，不经过 intelligentSecurityCheck；
+// forbiddenCommands/authRequiredCommands 仅约束 AI 工具调用路径 processToolCall。
+ipcMain.on('powershell-input', (event, data) => {
+    if (ptyProcess && typeof data === 'string') {
+        ptyProcess.write(data);
+    }
+});
+
+// --- 查询终端可见文本 ---
+ipcMain.on('query-visible-text-request', (event) => {
+    if (guiWindow && !guiWindow.isDestroyed()) {
+        guiWindow.webContents.send('query-visible-text');
+    }
+});
+
+let visibleTextResolver = null;
+
+ipcMain.on('visible-text-response', (event, text) => {
+    if (visibleTextResolver) {
+        visibleTextResolver(text);
+        visibleTextResolver = null;
     }
 });
 
@@ -157,44 +194,155 @@ ipcMain.on('close-window', () => {
     if (guiWindow) guiWindow.close();
 });
 
-// --- ANSI Escape Code Stripper ---
+// --- ANSI / terminal control projection for AI text summaries ---
 /**
- * 从字符串中移除 ANSI 转义序列（用于控制颜色的代码）。
- * @param {string} str - 可能包含 ANSI 代码的输入字符串。
- * @returns {string} - 清理后的纯文本字符串。
- */
-function stripAnsi(str) {
-    // 正则表达式用于匹配并移除 ANSI 转义码
-    return str.replace(
-        /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
-        ''
-    );
-}
-
-/**
- * 清理终端控制字符，避免退格、响铃等字符污染返回结果。
+ * 按“安全的一维日志投影语义”清理输出，用于 AI 工具返回的 Markdown 摘要。
+ *
+ * 注意：GUI 路径必须继续接收原始 PTY 数据，由 xterm.js 处理完整 ANSI/VT 状态机。
+ * 摘要层刻意不做跨行光标寻址模拟：PowerShell/PSReadLine 在长行、自动换行、
+ * CJK 宽字符场景下会发出光标定位序列，半模拟很容易把正常 JSON/路径投影成
+ * 大片空行或错位文本。这里仅处理最常见且低风险的日志语义：
+ * - CR 原地刷新当前逻辑行
+ * - LF/CRLF 稳定换行
+ * - BS 退格
+ * - CSI K 行内擦除
+ * - SGR 颜色与其它 CSI/OSC 控制序列忽略
+ *
  * @param {string} str - 原始终端输出。
- * @returns {string} - 清理后的文本。
+ * @returns {string} - 适合放入 Markdown codeblock 的纯文本快照。
  */
 function sanitizeTerminalOutput(str) {
     if (!str) {
         return '';
     }
 
-    const withoutAnsi = stripAnsi(str);
+    const normalized = String(str)
+        .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '') // OSC 序列
+        .replace(/\x00/g, '')                                  // null
+        .replace(/\x07/g, '');                                 // bell
 
-    // 处理退格：按终端语义移除“前一个字符 + \b”
-    let cleaned = withoutAnsi;
-    while (/[^\n]\x08/.test(cleaned)) {
-        cleaned = cleaned.replace(/[^\n]\x08/g, '');
+    const lines = [[]];
+    let row = 0;
+    let col = 0;
+
+    const ensureRow = (targetRow) => {
+        while (lines.length <= targetRow) {
+            lines.push([]);
+        }
+    };
+
+    const putChar = (char) => {
+        ensureRow(row);
+        lines[row][col] = char;
+        col += 1;
+    };
+
+    const eraseInLine = (mode) => {
+        ensureRow(row);
+        if (mode === 1) {
+            for (let i = 0; i <= col; i += 1) {
+                lines[row][i] = undefined;
+            }
+            return;
+        }
+
+        if (mode === 2) {
+            lines[row] = [];
+            col = 0;
+            return;
+        }
+
+        lines[row].length = col;
+    };
+
+    const parseFirstParam = (rawParams) => {
+        const cleanedParams = (rawParams || '').replace(/[?>=]/g, '');
+        const firstValue = cleanedParams.split(';')[0];
+        const parsed = Number.parseInt(firstValue, 10);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    for (let i = 0; i < normalized.length; i += 1) {
+        const char = normalized[i];
+
+        if (char === '\u001b' || char === '\u009b') {
+            const isC1Csi = char === '\u009b';
+            const nextChar = normalized[i + 1];
+
+            if (isC1Csi || nextChar === '[') {
+                let cursor = i + (isC1Csi ? 1 : 2);
+                let params = '';
+
+                while (cursor < normalized.length && !/[\x40-\x7e]/.test(normalized[cursor])) {
+                    params += normalized[cursor];
+                    cursor += 1;
+                }
+
+                if (cursor >= normalized.length) {
+                    break;
+                }
+
+                const finalByte = normalized[cursor];
+
+                if (finalByte === 'K') {
+                    eraseInLine(parseFirstParam(params));
+                } else if (finalByte === 'G') {
+                    const column = parseFirstParam(params) || 1;
+                    col = Math.max(0, column - 1);
+                }
+                // 其它 CSI（含 SGR m、跨行 A/B/H/J、私有模式 h/l）在摘要层只剥离不应用，
+                // 避免半终端状态机破坏普通长输出。真实 GUI 仍由 xterm.js 完整处理。
+
+                i = cursor;
+                continue;
+            }
+
+            // 非 CSI ESC 序列：跳过 ESC 和紧随的最终字节，避免污染摘要。
+            if (nextChar) {
+                i += 1;
+            }
+            continue;
+        }
+
+        if (char === '\r') {
+            col = 0;
+            if (normalized[i + 1] === '\n') {
+                row += 1;
+                ensureRow(row);
+                i += 1;
+            }
+            continue;
+        }
+
+        if (char === '\n') {
+            row += 1;
+            ensureRow(row);
+            continue;
+        }
+
+        if (char === '\b') {
+            col = Math.max(0, col - 1);
+            ensureRow(row);
+            lines[row][col] = undefined;
+            continue;
+        }
+
+        if (char === '\t') {
+            const nextTabStop = col + (8 - (col % 8));
+            while (col < nextTabStop) {
+                putChar(' ');
+            }
+            continue;
+        }
+
+        if (char >= ' ' || char === '\u3000') {
+            putChar(char);
+        }
     }
 
-    return cleaned
-        .replace(/\x08/g, '')                 // 孤立 backspace
-        .replace(/\x07/g, '')                 // bell
-        .replace(/\x00/g, '')                 // null
-        .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '') // OSC 序列
-        .replace(/\r(?!\n)/g, '');            // 裸 \r
+    return lines
+        .map((line) => line.map((cell) => cell || ' ').join('').replace(/[ \t]+$/g, ''))
+        .join('\n');
 }
 
 
@@ -205,7 +353,9 @@ let ptyProcess = null;
 // 新增：用于跟踪所有子进程，确保它们在插件卸载或程序退出时被正确清理
 const childProcesses = new Set();
 let guiDataListener = null; // 新增：保存GUI监听器的引用
-let isExecutingCommand = false; // 新增：执行命令状态标志
+let isExecutingCommand = false; // 仅表示 AI 短命令执行中；不要用于交互式 TUI 会话
+let interactiveMode = false; // 表示当前 PTY 被 snow/codex/claude 等交互式程序占用
+let lastKnownSize = { cols: 80, rows: 24 }; // GUI 最近一次 fit 出来的尺寸，用作 PTY 初始尺寸
 
 // --- 配置加载 ---
 const defaultConfig = {
@@ -446,12 +596,12 @@ function executeAdminCommand(command) {
 }
 
 /**
- * 在交互模式下请求用户确认并执行命令。
- * 这会打开一个非管理员权限的确认窗口。
- * @param {string} command - 需要确认和执行的命令。
- * @returns {Promise<string>} - 命令执行的结果或确认消息。
+ * 请求用户确认一个敏感命令，但不在确认脚本中执行命令。
+ * 确认通过后，命令仍回到主 PTY/xterm 会话执行，以保持 GUI 连续输出。
+ * @param {string} command - 需要展示给用户确认的命令。
+ * @returns {Promise<boolean>} - 用户是否允许执行。
  */
-function executeInteractiveCommand(command) {
+function requestInteractiveConfirmation(command) {
     return new Promise((resolve, reject) => {
         tmp.file({ postfix: '.txt' }, (err, tmpFilePath, fd, cleanupCallback) => {
             if (err) {
@@ -461,13 +611,13 @@ function executeInteractiveCommand(command) {
             const pythonConfirmScript = path.join(__dirname, 'AdminConfirm.py');
             const commandAsBase64 = Buffer.from(command).toString('base64');
 
-            // 注意：这里我们直接调用 pythonw.exe，而不是通过 Start-Process -Verb RunAs
-            // 这将以当前用户权限运行脚本，弹出一个确认框而不是UAC提权框。
+            // 普通敏感命令只需要当前权限确认，不应绕过主 PTY/xterm 执行链路。
             const child = spawn('pythonw.exe', [
                 pythonConfirmScript,
                 commandAsBase64,
                 tmpFilePath,
-                '--interactive-auth' // 传递一个额外参数，让Python脚本知道这是交互式认证
+                '--interactive-auth',
+                '--confirm-only'
             ], {
                 windowsHide: true
             });
@@ -484,25 +634,27 @@ function executeInteractiveCommand(command) {
                 reject(new Error(`无法启动交互式确认脚本: ${err.message}`));
             });
 
-            child.on('close', (code) => {
+            child.on('close', () => {
                 childProcesses.delete(child);
                 fs.readFile(tmpFilePath, 'utf-8', (readErr, data) => {
                     cleanupCallback();
 
                     if (readErr) {
                         if (stderrOutput.trim()) {
-                            return reject(new Error(`交互式脚本执行失败: ${stderrOutput.trim()}`));
+                            return reject(new Error(`交互式确认脚本失败: ${stderrOutput.trim()}`));
                         }
-                        return reject(new Error(`无法读取交互式任务的输出文件: ${readErr.message}`));
+                        return reject(new Error(`无法读取交互式确认结果文件: ${readErr.message}`));
                     }
 
                     const result = data.trim();
-                    if (result === "USER_CANCELLED") {
-                        resolve("用户取消了操作。");
-                    } else if (result.startsWith("ERROR:")) {
+                    if (result === 'CONFIRMED') {
+                        resolve(true);
+                    } else if (result === 'USER_CANCELLED') {
+                        resolve(false);
+                    } else if (result.startsWith('ERROR:')) {
                         reject(new Error(result.substring(6).trim()));
                     } else {
-                        resolve(result);
+                        reject(new Error(`未知的交互式确认结果: ${result || '<empty>'}`));
                     }
                 });
             });
@@ -511,9 +663,29 @@ function executeInteractiveCommand(command) {
 }
 
 /**
+ * 将 PTY 原始输出分发给消费者。
+ * 一期只转发给 GUI；二期可在这里接入 @xterm/headless 等后端终端 buffer。
+ * @param {string|Buffer} rawData - PTY 原始输出，不能在 GUI 路径前清洗 ANSI。
+ */
+function dispatchPtyData(rawData) {
+    if (!guiWindow || guiWindow.isDestroyed()) {
+        return;
+    }
+
+    const dataStr = rawData.toString('utf-8');
+    if (dataStr) {
+        guiWindow.webContents.send('powershell-data', dataStr);
+    }
+}
+
+/**
  * 创建一个新的伪终端 (pty) 进程。
  */
 function createNewPtySession() {
+    // newSession 是交互模式的一期低成本复位入口。
+    interactiveMode = false;
+    isExecutingCommand = false;
+
     // 如果已存在旧进程，先销毁它
     if (ptyProcess) {
         childProcesses.delete(ptyProcess);
@@ -540,39 +712,149 @@ function createNewPtySession() {
 
     ptyProcess = pty.spawn(shell, args, {
         name: 'xterm-color',
+        cols: lastKnownSize.cols,
+        rows: lastKnownSize.rows,
         cwd: process.env.USERPROFILE || process.env.HOME,
         env: process.env
     });
     childProcesses.add(ptyProcess);
+    const currentPtyProcess = ptyProcess;
 
     // 设置 PowerShell 输出为 UTF-8 编码
-    ptyProcess.write('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r');
+    currentPtyProcess.write('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r');
 
-    // 创建GUI数据监听器（带执行状态检查）
+    // 创建GUI数据监听器（带 AI 短命令执行状态检查）
     guiDataListener = (data) => {
-        // 关键修复：执行命令期间不向GUI发送数据
+        // AI 短命令期间由 executeSingleCommandInPty 的临时监听器负责 flushToGui，避免重复输出。
+        // 交互式 TUI 模式绝不能设置 isExecutingCommand，否则 GUI 会黑屏。
         if (isExecutingCommand) {
             return;
         }
 
-        if (guiWindow && !guiWindow.isDestroyed()) {
-            const dataStr = data.toString('utf-8');
-            if (dataStr) {
-                guiWindow.webContents.send('powershell-data', dataStr);
-            }
-        }
+        dispatchPtyData(data);
     };
 
     // 设置数据监听器，将所有 pty 输出直接代理到 GUI
-    ptyProcess.onData(guiDataListener);
+    currentPtyProcess.onData(guiDataListener);
 
-    // 当 pty 进程意外退出时，清理资源
-    ptyProcess.onExit(() => {
-        childProcesses.delete(ptyProcess);
+    // 当 pty 进程意外退出时，清理资源。
+    // 注意：newSession 会先 kill 旧 PTY 再创建新 PTY，旧 PTY 的异步 onExit 不能误清理新会话。
+    currentPtyProcess.onExit(() => {
+        childProcesses.delete(currentPtyProcess);
+
+        if (ptyProcess !== currentPtyProcess) {
+            return;
+        }
+
         ptyProcess = null;
         guiDataListener = null;
         isExecutingCommand = false;
+        interactiveMode = false;
     });
+}
+
+function buildHumanLaunchAnimationCommand() {
+    const script = [
+        '$esc = [char]27',
+        '# 尝试擦掉用于触发动画的短命令输入行，避免启动动画前出现杂乱命令文本。',
+        'Write-Host -NoNewline "$esc[1A$esc[2K`r"',
+        '',
+        '# 霓虹渐变色定义',
+        '$c1 = "$esc[38;2;245;194;231m" # Pink',
+        '$c2 = "$esc[38;2;203;166;247m" # Mauve',
+        '$c3 = "$esc[38;2;137;180;250m" # Blue',
+        '$c4 = "$esc[38;2;116;199;236m" # Sapphire',
+        '$c5 = "$esc[38;2;137;220;235m" # Sky',
+        '$c6 = "$esc[38;2;148;226;213m" # Teal',
+        '$reset = "$esc[0m"',
+        '$gray = "$esc[38;2;147;153;178m"',
+        '$darkGray = "$esc[38;2;88;91;112m"',
+        '$green = "$esc[38;2;166;227;161m"',
+        '$yellow = "$esc[38;2;249;226;175m"',
+        '',
+        '# 逐行打印华丽的 VCP CLI ASCII Art',
+        'Write-Host ""',
+        'Write-Host "  ${c1}██╗   ██╗  ██████╗  ██████╗      ██████╗  ██╗      ██╗${reset}"',
+        'Start-Sleep -Milliseconds 40',
+        'Write-Host "  ${c2}██║   ██║ ██╔════╝  ██╔══██╗    ██╔════╝  ██║      ██║${reset}"',
+        'Start-Sleep -Milliseconds 40',
+        'Write-Host "  ${c3}██║   ██║ ██║       ██████╔╝    ██║       ██║      ██║${reset}"',
+        'Start-Sleep -Milliseconds 40',
+        'Write-Host "  ${c4}╚██╗ ██╔╝ ██║       ██╔═══╝     ██║       ██║      ██║${reset}"',
+        'Start-Sleep -Milliseconds 40',
+        'Write-Host "  ${c5} ╚████╔╝  ╚██████╗  ██║         ╚██████╗  ███████╗ ██║${reset}"',
+        'Start-Sleep -Milliseconds 40',
+        'Write-Host "  ${c6}  ╚═══╝    ╚═════╝  ╚═╝          ╚═════╝  ╚══════╝ ╚═╝${reset}"',
+        'Start-Sleep -Milliseconds 50',
+        '',
+        '# 打印副标题和分割线',
+        'Write-Host "  ${darkGray}──────────────────────────────────────────────────────────${reset}"',
+        'Write-Host "  ${gray}Distributed PowerShell Bridge & Interactive Terminal GUI${reset}"',
+        'Write-Host "  ${darkGray}──────────────────────────────────────────────────────────${reset}"',
+        'Write-Host ""',
+        '',
+        '# 华丽的渐变色进度条加载动画',
+        '$barWidth = 30',
+        'for ($i = 0; $i -le $barWidth; $i++) {',
+        '    $percent = [math]::Round(($i / $barWidth) * 100)',
+        '    $filledCount = $i',
+        '    $emptyCount = $barWidth - $i',
+        '    ',
+        '    # 动态计算渐变色 (从 Mauve 203,166,247 渐变到 Teal 148,226,213)',
+        '    $r = [int](203 - (203 - 148) * ($i / $barWidth))',
+        '    $g = [int](166 + (226 - 166) * ($i / $barWidth))',
+        '    $b = [int](247 - (247 - 213) * ($i / $barWidth))',
+        '    $color = "$esc[38;2;${r};${g};${b}m"',
+        '    ',
+        '    $filled = "▰" * $filledCount',
+        '    $empty = "▱" * $emptyCount',
+        '    ',
+        '    Write-Host -NoNewline "$esc[2K`r  ${gray}Loading Bridge:${reset} [${color}${filled}${darkGray}${empty}${reset}] ${color}${percent}%${reset}"',
+        '    Start-Sleep -Milliseconds 35',
+        '}',
+        'Write-Host ""',
+        'Write-Host ""',
+        '',
+        '# 打印系统就绪状态和极客风系统信息',
+        'Write-Host "  ${gray}Status:${reset}    ${green}ONLINE${reset}"',
+        'Write-Host "  ${gray}Session:${reset}   ${c3}Active PowerShell Bridge${reset}"',
+        'Write-Host "  ${gray}Terminal:${reset}  ${yellow}Interactive Console Ready${reset}"',
+        'Write-Host ""',
+        'Write-Host "  ${gray}Type commands below. Press ${c3}Ctrl+C${gray} to interrupt.${reset}"',
+        'Write-Host ""',
+        'Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue',
+    ].join('\n');
+
+    const tempScriptName = `vcp-cli-launch-${crypto.randomUUID()}.ps1`;
+    const tempScriptPath = path.join(os.tmpdir(), tempScriptName);
+    fs.writeFileSync(tempScriptPath, `\ufeff${script}`, 'utf8');
+
+    const escapedTempScriptPath = tempScriptPath.replace(/'/g, "''");
+    return `& '${escapedTempScriptPath}'\r`;
+}
+
+/**
+ * 打开或聚焦 PowerShellExecutor 的交互式终端 GUI。
+ * 该入口供主程序托盘 / 桌面应用启动器直接调用，不需要先通过 AI 工具执行命令。
+ * @returns {BrowserWindow} PowerShell 终端窗口实例。
+ */
+function openGuiTerminal() {
+    ensureGuiWindow();
+
+    const shouldPlayHumanLaunchAnimation = !ptyProcess;
+    if (!ptyProcess) {
+        createNewPtySession();
+    }
+
+    if (shouldPlayHumanLaunchAnimation && ptyProcess) {
+        setTimeout(() => {
+            if (ptyProcess) {
+                ptyProcess.write(buildHumanLaunchAnimationCommand());
+            }
+        }, 650);
+    }
+
+    return guiWindow;
 }
 
 /**
@@ -595,6 +877,7 @@ function executeSingleCommandInPty(ptyProcess, singleCommand) {
         let rawOutput = '';
         let hasSeenStartBoundary = false;
         let settled = false;
+        let tempScriptPath = null;
 
         const startBoundary = `__VCP_COMMAND_START_${crypto.randomUUID()}__`;
         const endBoundary = `__VCP_COMMAND_END_${crypto.randomUUID()}__`;
@@ -606,11 +889,19 @@ function executeSingleCommandInPty(ptyProcess, singleCommand) {
             if (listenerDisposable && typeof listenerDisposable.dispose === 'function') {
                 listenerDisposable.dispose();
             }
+            if (tempScriptPath) {
+                try {
+                    fs.unlinkSync(tempScriptPath);
+                } catch (e) {
+                    console.warn('[PowerShellExecutor] Failed to remove temporary script:', e.message);
+                }
+                tempScriptPath = null;
+            }
         };
 
         const flushToGui = (text) => {
-            if (guiWindow && !guiWindow.isDestroyed() && text) {
-                guiWindow.webContents.send('powershell-data', text);
+            if (text) {
+                dispatchPtyData(text);
             }
         };
 
@@ -657,21 +948,68 @@ function executeSingleCommandInPty(ptyProcess, singleCommand) {
             reject(new Error(`Command "${singleCommand}" timed out after 60 seconds.`));
         }, 60000);
 
-        const escapedCommand = singleCommand.replace(/`/g, '``');
-        const wrappedCommand = [
-            `Write-Host "${startBoundary}"`,
-            `& {`,
-            escapedCommand,
-            `}`,
-            `Write-Host "${endBoundary}"`
-        ].join('\r\n');
+        try {
+            const tempScriptName = `vcp-powershell-${crypto.randomUUID()}.ps1`;
+            tempScriptPath = path.join(os.tmpdir(), tempScriptName);
+            // Windows PowerShell 5.1 对无 BOM UTF-8 的中文兼容性较差，写入 BOM 保证脚本内容稳定解析。
+            fs.writeFileSync(tempScriptPath, `\ufeff${singleCommand}`, 'utf8');
 
-        ptyProcess.write(`${wrappedCommand}\r\n`);
+            const escapedTempScriptPath = tempScriptPath.replace(/'/g, "''");
+            const encodedStartBoundary = Buffer.from(startBoundary, 'utf8').toString('base64');
+            const encodedEndBoundary = Buffer.from(endBoundary, 'utf8').toString('base64');
+
+            // 不能把 boundary 明文写进交互式命令行：
+            // PowerShell/PSReadLine 会先回显整行输入，若监听器在“输入回显”里提前匹配到 boundary，
+            // 就会把命令尚未执行的回显误判为真实输出，造成提前结束或卡死。
+            // 因此这里用 Base64 在 PowerShell 内部还原 boundary，让 GUI/AI 只匹配真实 Write-Host 输出。
+            const wrappedCommand = [
+                `$__vcpStart = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${encodedStartBoundary}'))`,
+                `$__vcpEnd = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${encodedEndBoundary}'))`,
+                `Write-Host $__vcpStart`,
+                // 即使临时脚本发生 ParserError / RuntimeException，也必须输出 end boundary，
+                // 否则 AI 调用会一直等待直到超时。错误文本仍由 PTY 原样进入 rawOutput。
+                `try { & '${escapedTempScriptPath}' } finally { Write-Host $__vcpEnd }`
+            ].join('; ');
+
+            ptyProcess.write(`${wrappedCommand}\r`);
+        } catch (error) {
+            settled = true;
+            cleanupListener(listenerDisposable, timeoutId);
+            reject(new Error(`无法创建或执行临时 PowerShell 脚本: ${error.message}`));
+        }
     });
 }
 
 
 async function processToolCall(args) {
+    const action = typeof args.action === 'string' ? args.action.trim() : 'execute';
+
+    if (action.startsWith('queryVisible')) {
+        ensureGuiWindow();
+        
+        const match = action.match(/^queryVisible(\d+)?$/);
+        const maxLines = match && match[1] ? parseInt(match[1], 10) : null;
+        
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                visibleTextResolver = null;
+                reject(new Error('查询终端文本超时'));
+            }, 5000);
+
+            visibleTextResolver = (text) => {
+                clearTimeout(timeout);
+                resolve({ content: [{ type: 'text', text: `\`\`\`\n${text}\n\`\`\`` }] });
+            };
+
+            guiWindow.webContents.send('query-visible-text', { maxLines });
+        });
+    }
+
+    if (action === 'endInteractive') {
+        interactiveMode = false;
+        return { content: [{ type: 'text', text: 'Interactive mode flag cleared. The existing PTY session was not terminated.' }] };
+    }
+
     // --- 1. 解析和排序命令 ---
     const commandEntries = Object.entries(args)
         .filter(([key]) => key.startsWith('command'))
@@ -685,6 +1023,10 @@ async function processToolCall(args) {
 
     if (commandEntries.length === 0) {
         throw new Error('未提供任何有效的 command 参数 (例如 command, command1, command2)。');
+    }
+
+    if (action !== 'execute' && action !== 'startInteractive') {
+        throw new Error(`不支持的 action: ${action}`);
     }
 
     // --- 2. 智能安全预检查 ---
@@ -735,14 +1077,14 @@ async function processToolCall(args) {
         return { content: [{ type: 'text', text: `\`\`\`powershell\n${cleanOutput}\n\`\`\`` }] };
     }
 
-    // 路径 B: 交互式授权模式
+    // 路径 B: 普通敏感命令确认模式
+    // 这里只做确认；确认通过后继续走路径 C，在主 PTY/xterm 会话中执行并连续显示输出。
     if (needsInteractiveAuth) {
         const combinedCommand = commandEntries.map(e => e.value).join('; ');
-        const fullCommand = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${combinedCommand}`;
-        // 注意：此模式下，命令将在新的、非持久化的进程中执行，而不是在PTY会话中。
-        const output = await executeInteractiveCommand(fullCommand);
-        const cleanOutput = output.replace(/\r\n/g, '\n').replace(/\r/g, '');
-        return { content: [{ type: 'text', text: `\`\`\`powershell\n${cleanOutput}\n\`\`\`` }] };
+        const confirmed = await requestInteractiveConfirmation(combinedCommand);
+        if (!confirmed) {
+            return { content: [{ type: 'text', text: '用户取消了操作。' }] };
+        }
     }
 
     // 路径 C: 标准非管理员会话执行
@@ -751,6 +1093,22 @@ async function processToolCall(args) {
     if (newSession || !ptyProcess) {
         createNewPtySession();
         await new Promise(resolve => setTimeout(resolve, 500)); // 等待PTY初始化
+    }
+
+    if (action === 'startInteractive') {
+        if (commandEntries.length > 1) {
+            throw new Error('startInteractive 只支持单条 command。');
+        }
+
+        const command = commandEntries[0].value;
+        interactiveMode = true;
+        // 不设置 isExecutingCommand；交互式 TUI 输出必须走常驻 guiDataListener，否则会黑屏。
+        ptyProcess.write(`${command}\r`);
+        return { content: [{ type: 'text', text: `Interactive session started: ${command}` }] };
+    }
+
+    if (interactiveMode) {
+        throw new Error('当前终端正被交互式程序 (snow/codex/claude) 占用，请先退出并调用 action:"endInteractive"，或使用 newSession:true 重置会话。');
     }
 
     const deltaOutputs = [];
@@ -837,10 +1195,14 @@ function cleanup() {
 
     // 4. 确保 ptyProcess 状态被重置
     ptyProcess = null;
+    guiDataListener = null;
+    isExecutingCommand = false;
+    interactiveMode = false;
 }
 
-// 导出 processToolCall 函数和 cleanup 函数
+// 导出 processToolCall 函数、GUI 打开函数和 cleanup 函数
 module.exports = {
     processToolCall,
+    openGuiTerminal,
     cleanup
 };

@@ -37,6 +37,70 @@ window.chatManager = (() => {
 
 
 
+    function attachTimestampMetaToVcpMessage(vcpMessage, historyMessage) {
+        if (!vcpMessage || !historyMessage || !historyMessage.id || typeof historyMessage.timestamp !== 'number') {
+            return vcpMessage;
+        }
+        return {
+            ...vcpMessage,
+            __vcpchatTimestampMeta: {
+                messageId: historyMessage.id,
+                role: historyMessage.role,
+                timestamp: historyMessage.timestamp
+            }
+        };
+    }
+
+    function buildTurnDepthMap(history = []) {
+        const turns = [];
+        for (let i = history.length - 1; i >= 0; i--) {
+            if (history[i].role === 'assistant') {
+                const turn = { assistant: history[i], user: null };
+                if (i > 0 && history[i - 1].role === 'user') {
+                    turn.user = history[i - 1];
+                    i--;
+                }
+                turns.push(turn);
+            } else if (history[i].role === 'user') {
+                turns.push({ assistant: null, user: history[i] });
+            }
+        }
+        turns.reverse();
+
+        const depthMap = new Map();
+        turns.forEach((turn, turnIndex) => {
+            const depth = turns.length - 1 - turnIndex;
+            if (turn.assistant?.id) {
+                depthMap.set(turn.assistant.id, depth);
+            }
+            if (turn.user?.id) {
+                depthMap.set(turn.user.id, depth);
+            }
+        });
+        return depthMap;
+    }
+
+    function getCompiledRegex(rule) {
+        if (!rule?.findPattern) {
+            return null;
+        }
+
+        if (window.uiHelperFunctions?.getCompiledRegex) {
+            const compiled = window.uiHelperFunctions.getCompiledRegex(rule.findPattern);
+            return compiled?.regex || null;
+        }
+
+        if (window.uiHelperFunctions?.regexFromString) {
+            return window.uiHelperFunctions.regexFromString(rule.findPattern);
+        }
+
+        const regexMatch = rule.findPattern.match(/^\/(.+?)\/([gimuy]*)$/);
+        if (regexMatch) {
+            return new RegExp(regexMatch[1], regexMatch[2]);
+        }
+        return new RegExp(rule.findPattern, 'g');
+    }
+
     /**
      * 应用单个正则规则到文本
      * @param {string} text - 输入文本
@@ -49,24 +113,14 @@ window.chatManager = (() => {
         }
 
         try {
-            // 使用 uiHelperFunctions.regexFromString 来解析正则表达式
-            let regex = null;
-            if (window.uiHelperFunctions && window.uiHelperFunctions.regexFromString) {
-                regex = window.uiHelperFunctions.regexFromString(rule.findPattern);
-            } else {
-                // 后备方案：手动解析
-                const regexMatch = rule.findPattern.match(/^\/(.+?)\/([gimuy]*)$/);
-                if (regexMatch) {
-                    regex = new RegExp(regexMatch[1], regexMatch[2]);
-                } else {
-                    regex = new RegExp(rule.findPattern, 'g');
-                }
-            }
+            const regex = getCompiledRegex(rule);
             
             if (!regex) {
                 console.error('无法解析正则表达式', rule.findPattern);
                 return text;
             }
+
+            regex.lastIndex = 0;
             
             // 应用替换（如果没有替换内容，则默认替换为空字符串）
             return text.replace(regex, rule.replaceWith || '');
@@ -74,6 +128,28 @@ window.chatManager = (() => {
             console.error('应用正则规则时出错', rule.findPattern, error);
             return text;
         }
+    }
+
+    function getActiveRegexRules(rules, scope, role, depth = 0) {
+        if (!rules || !Array.isArray(rules)) {
+            return [];
+        }
+
+        return rules.filter(rule => {
+            if (!rule || rule.enabled === false || !rule.findPattern) return false;
+
+            const shouldApplyToScope =
+                (scope === 'context' && rule.applyToContext) ||
+                (scope === 'frontend' && rule.applyToFrontend);
+            if (!shouldApplyToScope) return false;
+
+            const shouldApplyToRole = rule.applyToRoles && rule.applyToRoles.includes(role);
+            if (!shouldApplyToRole) return false;
+
+            const minDepthOk = rule.minDepth === undefined || rule.minDepth === -1 || depth >= rule.minDepth;
+            const maxDepthOk = rule.maxDepth === undefined || rule.maxDepth === -1 || depth <= rule.maxDepth;
+            return minDepthOk && maxDepthOk;
+        });
     }
 
     /**
@@ -90,29 +166,14 @@ window.chatManager = (() => {
             return text;
         }
 
+        const activeRules = getActiveRegexRules(rules, scope, role, depth);
+        if (activeRules.length === 0) {
+            return text;
+        }
+
         let processedText = text;
         
-        rules.forEach(rule => {
-            // 检查是否应该应用此规则
-            
-            // 1. 检查作用域
-            const shouldApplyToScope =
-                (scope === 'context' && rule.applyToContext) ||
-                (scope === 'frontend' && rule.applyToFrontend);
-            
-            if (!shouldApplyToScope) return;
-            
-            // 2. 检查角色
-            const shouldApplyToRole = rule.applyToRoles && rule.applyToRoles.includes(role);
-            if (!shouldApplyToRole) return;
-            
-            // 3. 检查深度（-1 表示无限制）
-            const minDepthOk = rule.minDepth === undefined || rule.minDepth === -1 || depth >= rule.minDepth;
-            const maxDepthOk = rule.maxDepth === undefined || rule.maxDepth === -1 || depth <= rule.maxDepth;
-            
-            if (!minDepthOk || !maxDepthOk) return;
-            
-            // 应用规则
+        activeRules.forEach(rule => {
             processedText = applyRegexRule(processedText, rule);
         });
         
@@ -1019,6 +1080,13 @@ window.chatManager = (() => {
 
             // VCPChatTarven (高级回复) - 收集生效的规则
             const tavernRules = getTavernRules('agent');
+            const contextRegexRules = Array.isArray(agentConfig?.stripRegexes)
+                ? agentConfig.stripRegexes
+                : [];
+            const hasContextRegexRules = contextRegexRules.some(rule => rule?.enabled !== false && rule.applyToContext);
+            const contextDepthMap = hasContextRegexRules
+                ? buildTurnDepthMap(historySnapshotForVCP)
+                : null;
 
             const messagesForVCP = await Promise.all(historySnapshotForVCP.map(async msg => {
                 let vcpImageAttachmentsPayload = [];
@@ -1027,32 +1095,14 @@ window.chatManager = (() => {
                 let currentMessageTextContent = msg.content;
 
                 // --- 应用正则规则（后端上下文）---
-                if (agentConfig?.stripRegexes && Array.isArray(agentConfig.stripRegexes) && agentConfig.stripRegexes.length > 0) {
-                    // --- 按“对话轮次”计算深度 ---
-                    const turns = [];
-                    for (let i = historySnapshotForVCP.length - 1; i >= 0; i--) {
-                        if (historySnapshotForVCP[i].role === 'assistant') {
-                            const turn = { assistant: historySnapshotForVCP[i], user: null };
-                            if (i > 0 && historySnapshotForVCP[i - 1].role === 'user') {
-                                turn.user = historySnapshotForVCP[i - 1];
-                                i--; // 跳过用户消息，因为已经配对
-                            }
-                            turns.unshift(turn);
-                        } else if (historySnapshotForVCP[i].role === 'user') {
-                            // 处理末尾的单个用户消息
-                            turns.unshift({ assistant: null, user: historySnapshotForVCP[i] });
-                        }
-                    }
-                    
-                    // 找到当前消息所在的轮次
-                    const turnIndex = turns.findIndex(t => (t.assistant && t.assistant.id === msg.id) || (t.user && t.user.id === msg.id));
-                    const depth = turnIndex !== -1 ? (turns.length - 1 - turnIndex) : -1;
+                if (hasContextRegexRules && contextDepthMap) {
+                    const depth = contextDepthMap.get(msg.id);
 
-                    if (depth !== -1) {
+                    if (depth !== undefined) {
                         // 应用规则到消息内容
                         currentMessageTextContent = applyRegexRules(
                             currentMessageTextContent,
-                            agentConfig.stripRegexes,
+                            contextRegexRules,
                             'context',  // 这里处理的是发送给AI的上下文
                             msg.role,
                             depth
@@ -1092,13 +1142,20 @@ window.chatManager = (() => {
                     for (const att of msg.attachments) {
                         const fileManagerData = att._fileManagerData || {};
                         // 优先使用 att.src，因为它代表前端的本地可访问路径
-                        // 后备为 internalPath（来自 fileManager），最后才是文件名
-                        const filePathForContext = att.src || (fileManagerData.internalPath ? fileManagerData.internalPath.replace('file://', '') : (att.name || '未知文件'));
+                        // 后备为 internalPath（来自 fileManager 或 att 顶层），最后才是文件名
+                        // 兼容两种附件结构：通过正常发送的附件（数据在 _fileManagerData 中）
+                        // 和通过 addAttachmentsToMessage 添加的附件（数据直接在 att 顶层）
+                        const effectiveInternalPath = fileManagerData.internalPath || att.internalPath;
+                        const filePathForContext = att.src || (effectiveInternalPath ? effectiveInternalPath.replace('file://', '') : (att.name || '未知文件'));
 
-                        if (fileManagerData.imageFrames && fileManagerData.imageFrames.length > 0) {
+                        // 兼容读取：优先从 _fileManagerData 读取，回退到 att 顶层字段
+                        const effectiveImageFrames = fileManagerData.imageFrames || att.imageFrames;
+                        const effectiveExtractedText = fileManagerData.extractedText || att.extractedText;
+
+                        if (effectiveImageFrames && effectiveImageFrames.length > 0) {
                              historicalAppendedText += `\n\n[附加文件: ${filePathForContext} (扫描版PDF，已转换为图片)]`;
-                        } else if (fileManagerData.extractedText) {
-                            historicalAppendedText += `\n\n[附加文件: ${filePathForContext}]\n${fileManagerData.extractedText}\n[/附加文件结束: ${att.name || '未知文件'}]`;
+                        } else if (effectiveExtractedText) {
+                            historicalAppendedText += `\n\n[附加文件: ${filePathForContext}]\n${effectiveExtractedText}\n[/附加文件结束: ${att.name || '未知文件'}]`;
                         } else {
                             // 对于没有提取文本的文件（如音视频），只附加路径
                             historicalAppendedText += `\n\n[附加文件: ${filePathForContext}]`;
@@ -1111,17 +1168,19 @@ window.chatManager = (() => {
                     // --- IMAGE PROCESSING ---
                     const imageAttachmentsPromises = msg.attachments.map(async att => {
                         const fileManagerData = att._fileManagerData || {};
+                        // 兼容读取：优先从 _fileManagerData 读取，回退到 att 顶层字段
+                        const effectiveImageFrames = fileManagerData.imageFrames || att.imageFrames;
                         // Case 1: Scanned PDF converted to image frames
-                        if (fileManagerData.imageFrames && fileManagerData.imageFrames.length > 0) {
-                            return fileManagerData.imageFrames.map(frameData => ({
+                        if (effectiveImageFrames && effectiveImageFrames.length > 0) {
+                            return effectiveImageFrames.map(frameData => ({
                                 type: 'image_url',
                                 image_url: { url: `data:image/jpeg;base64,${frameData}` }
                             }));
                         }
                         // Case 2: Regular image file (including GIFs that get framed)
-                        if (att.type.startsWith('image/')) {
+                        if (att.type && att.type.startsWith('image/')) {
                             try {
-                                const result = await electronAPI.getFileAsBase64(att.src);
+                                const result = await electronAPI.getFileAsBase64(att.src || att.internalPath);
                                 if (result && result.success) {
                                     return result.base64Frames.map(frameData => ({
                                         type: 'image_url',
@@ -1149,10 +1208,10 @@ window.chatManager = (() => {
                     // --- AUDIO PROCESSING ---
                     const supportedAudioTypes = ['audio/wav', 'audio/mpeg', 'audio/mp3', 'audio/aiff', 'audio/aac', 'audio/ogg', 'audio/flac'];
                     const audioAttachmentsPromises = msg.attachments
-                        .filter(att => supportedAudioTypes.includes(att.type))
+                        .filter(att => att.type && supportedAudioTypes.includes(att.type))
                         .map(async att => {
                             try {
-                                const result = await electronAPI.getFileAsBase64(att.src);
+                                const result = await electronAPI.getFileAsBase64(att.src || att.internalPath);
                                 if (result && result.success) {
                                     return result.base64Frames.map(frameData => ({
                                         type: 'image_url',
@@ -1175,10 +1234,10 @@ window.chatManager = (() => {
 
                     // --- VIDEO PROCESSING ---
                     const videoAttachmentsPromises = msg.attachments
-                        .filter(att => att.type.startsWith('video/'))
+                        .filter(att => att.type && att.type.startsWith('video/'))
                         .map(async att => {
                             try {
-                                const result = await electronAPI.getFileAsBase64(att.src);
+                                const result = await electronAPI.getFileAsBase64(att.src || att.internalPath);
                                 if (result && result.success) {
                                     return result.base64Frames.map(frameData => ({
                                         type: 'image_url',
@@ -1212,7 +1271,10 @@ window.chatManager = (() => {
                      finalContentPartsForVCP.push({ type: 'text', text: '(用户发送了附件，但无文本或图片内容)' });
                 }
                 
-                return { role: msg.role, content: finalContentPartsForVCP.length > 0 ? finalContentPartsForVCP : msg.content };
+                return attachTimestampMetaToVcpMessage(
+                    { role: msg.role, content: finalContentPartsForVCP.length > 0 ? finalContentPartsForVCP : msg.content },
+                    msg
+                );
             }));
 
             if (agentConfig && agentConfig.systemPrompt) {
@@ -1286,7 +1348,9 @@ window.chatManager = (() => {
                 agentId: currentSelectedItem.id,
                 agentName: currentSelectedItem.name || currentSelectedItem.id, // 修复：为单聊上下文添加 agentName，并使用 ID 作为回退
                 topicId: currentTopicId,
-                isGroupMessage: false
+                isGroupMessage: false,
+                avatarUrl: currentSelectedItem.avatarUrl,
+                avatarColor: (currentSelectedItem.config || currentSelectedItem)?.avatarCalculatedColor
             };
 
             const vcpResponse = await electronAPI.sendToVCP(

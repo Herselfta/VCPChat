@@ -25,7 +25,7 @@ function setupPlayer(app) {
         app.pendingTrackPath = track.path;
         app.isTrackLoading = true;
 
-        app.trackTitle.textContent = track.title || '未知标题';
+        app.trackTitle.textContent = app.stripAudioExtension(track.title) || '未知标题';
         app.trackArtist.textContent = track.artist || '未知艺术家';
         app.trackBitrate.textContent = track.bitrate ? `${Math.round(track.bitrate / 1000)} kbps` : '';
 
@@ -36,7 +36,7 @@ function setupPlayer(app) {
             app.updateBlurredBackground(albumArtUrl);
         } else {
             app.albumArt.style.backgroundImage = defaultArtUrl;
-            app.updateBlurredBackground(defaultArtUrl);
+            app.updateBlurredBackground('none');
         }
 
         app.renderPlaylist(app.currentFilteredTracks);
@@ -88,6 +88,7 @@ function setupPlayer(app) {
             app.lastCommandTime = Date.now();
             app.expectedPlayingState = true;
             app.isPlaying = true;
+            document.body.classList.add('music-playing');
             app.playPauseBtn.classList.add('is-playing');
             app.phantomAudio.loop = true;
             app.phantomAudio.play().catch(e => console.error("Phantom audio play failed:", e));
@@ -105,6 +106,7 @@ function setupPlayer(app) {
             app.lastCommandTime = Date.now();
             app.expectedPlayingState = false;
             app.isPlaying = false;
+            document.body.classList.remove('music-playing');
             app.playPauseBtn.classList.remove('is-playing');
             app.phantomAudio.pause();
             if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
@@ -254,7 +256,7 @@ function setupPlayer(app) {
             const track = app.playlist[index];
             app.pendingTrackPath = track.path;
             app.isTrackLoading = false; // gapless 切歌后后端已经加载好了，重置加载标志
-            app.trackTitle.textContent = track.title || '未知标题';
+            app.trackTitle.textContent = app.stripAudioExtension(track.title) || '未知标题';
             app.trackArtist.textContent = track.artist || '未知艺术家';
             app.trackBitrate.textContent = track.bitrate ? `${Math.round(track.bitrate / 1000)} kbps` : '';
             
@@ -265,7 +267,7 @@ function setupPlayer(app) {
                 app.updateBlurredBackground(albumArtUrl);
             } else {
                 app.albumArt.style.backgroundImage = defaultArtUrl;
-                app.updateBlurredBackground(defaultArtUrl);
+                app.updateBlurredBackground('none');
             }
             
             app.renderPlaylist(app.currentFilteredTracks);
@@ -301,7 +303,7 @@ function setupPlayer(app) {
                     const track = app.playlist[fuzzyIndex];
                     app.pendingTrackPath = track.path;
                     app.isTrackLoading = false;
-                    app.trackTitle.textContent = track.title || '未知标题';
+                    app.trackTitle.textContent = app.stripAudioExtension(track.title) || '未知标题';
                     app.trackArtist.textContent = track.artist || '未知艺术家';
                     app.trackBitrate.textContent = track.bitrate ? `${Math.round(track.bitrate / 1000)} kbps` : '';
                     
@@ -312,7 +314,7 @@ function setupPlayer(app) {
                         app.updateBlurredBackground(albumArtUrl);
                     } else {
                         app.albumArt.style.backgroundImage = defaultArtUrl;
-                        app.updateBlurredBackground(defaultArtUrl);
+                        app.updateBlurredBackground('none');
                     }
                     
                     app.renderPlaylist(app.currentFilteredTracks);

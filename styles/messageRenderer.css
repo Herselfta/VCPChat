@@ -253,7 +253,7 @@
     -webkit-background-clip: text !important;
     background-clip: text !important;
     -webkit-text-fill-color: transparent !important;
-    text-fill-color: transparent !important;
+    color: transparent !important;
     font-style: normal !important;
     font-weight: bold !important;
     padding: 1px 3px !important;
@@ -301,8 +301,8 @@
     border: 1px solid #eaddd0;
     /* A soft, paper-like border */
     border-radius: 8px !important;
-    padding: 12px 18px 15px 48px !important;
-    /* Adjusted padding for new icon placement */
+    padding: 12px 18px 15px 18px !important;
+    /* Compact padding; icon is now inline with the title */
     color: #5d4037 !important;
     /* A warm, dark brown for text */
     box-shadow: 0 3px 8px rgba(0, 0, 0, 0.08);
@@ -332,19 +332,9 @@
     margin-bottom: 0;
 }
 
-/* The decorative icon on the top left, changed to a quill */
+/* Decorative quill icon moved inline with the diary title */
 .maid-diary-bubble::before {
-    content: "✒️";
-    position: absolute;
-    top: 14px;
-    left: 16px;
-    font-size: 22px;
-    opacity: 0.6;
-    z-index: 2;
-    transform: rotate(-15deg);
-    /* Tilted for a more dynamic look */
-    animation: none !important;
-    /* Removing previous animation for a more static, elegant feel */
+    display: none !important;
 }
 
 /* Removing the animated border for a cleaner look */
@@ -365,11 +355,23 @@
 
 /* "Maid's Diary" title */
 .diary-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     font-weight: bold;
     font-size: 1.1em;
     color: #6d4c41;
     /* A rich, brownish color */
     font-family: var(--vcp-diary-font-family, 'Georgia', 'Times New Roman', serif) !important;
+}
+
+.diary-title::before {
+    content: "✒️";
+    display: inline-block;
+    font-size: 1.15em;
+    line-height: 1;
+    opacity: 0.6;
+    transform: rotate(-15deg);
 }
 
 /* Date on the top right */
@@ -380,6 +382,33 @@
     font-style: italic;
 }
 
+/* Valet-compatible DailyNote variant */
+.valet-diary-bubble {
+    background: #f6f9fd !important;
+    border-color: #d0dbe8;
+    color: #374151 !important;
+}
+
+.valet-diary-bubble .diary-title {
+    color: #3f5872;
+}
+
+.valet-diary-bubble .diary-title::before {
+    content: "🖋️";
+}
+
+.valet-diary-bubble .diary-date,
+.valet-diary-bubble .diary-maid-info,
+.valet-diary-bubble .diary-maid-name,
+.valet-diary-bubble .diary-folder-name {
+    color: #607d9a;
+}
+
+.valet-diary-bubble .diary-maid-name,
+.valet-diary-bubble .diary-folder-name {
+    background: rgba(96, 125, 154, 0.08);
+}
+
 /* Container for the Maid's name info */
 .diary-maid-info {
     margin-bottom: 12px;
@@ -387,16 +416,23 @@
     color: #8d6e63;
 }
 
-.diary-maid-label {
+.diary-maid-label,
+.diary-folder-label {
     font-weight: bold;
 }
 
-.diary-maid-name {
+.diary-maid-name,
+.diary-folder-name {
     font-style: italic;
     color: #a1887f;
     background: rgba(161, 136, 127, 0.08);
     padding: 1px 5px;
     border-radius: 4px;
+}
+
+.diary-meta-separator {
+    color: #bcaaa4;
+    opacity: 0.75;
 }
 
 /* The main content of the diary entry */
@@ -412,6 +448,176 @@
 /* Hide copy button as it's not a code block */
 .maid-diary-bubble>.code-copy {
     display: none !important;
+}
+
+/* --- Maid Diary Update Bubble --- */
+.maid-diary-update-bubble {
+    display: block !important;
+    background: #fffdf9 !important;
+    border: 1px solid #e4d7c8;
+    border-radius: 8px !important;
+    padding: 12px 14px !important;
+    color: #4e342e !important;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.08);
+    margin-top: 10px !important;
+    margin-bottom: 12px !important;
+    font-family: var(--vcp-diary-font-family, 'Georgia', 'Times New Roman', serif) !important;
+    font-size: 0.95em !important;
+    line-height: 1.65;
+    box-sizing: border-box;
+}
+
+.diary-update-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    border-bottom: 1px solid #d7ccc8;
+    padding-bottom: 6px;
+    margin-bottom: 10px;
+}
+
+.diary-update-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    color: #6d4c41;
+}
+
+.diary-update-title::before {
+    content: "✏️";
+    font-size: 1.05em;
+    opacity: 0.75;
+}
+
+.diary-update-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    font-size: 0.9em;
+    color: #8d6e63;
+}
+
+.diary-update-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.diary-update-side {
+    min-width: 0;
+    border-radius: 7px;
+    padding: 9px 11px;
+    border: 1px solid rgba(141, 110, 99, 0.18);
+    background: rgba(161, 136, 127, 0.06);
+}
+
+.diary-update-before {
+    border-left: 3px solid #bcaaa4;
+}
+
+.diary-update-after {
+    border-left: 3px solid #81c784;
+    background: rgba(129, 199, 132, 0.08);
+}
+
+.diary-update-label {
+    display: inline-block;
+    font-weight: 700;
+    font-size: 0.82em;
+    letter-spacing: 0.08em;
+    color: #8d6e63;
+    margin-bottom: 5px;
+}
+
+.diary-update-content {
+    color: #4e342e;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.diary-update-content>p:first-child {
+    margin-top: 0;
+}
+
+.diary-update-content>p:last-child {
+    margin-bottom: 0;
+}
+
+.diary-update-arrow {
+    align-self: center;
+    color: #a1887f;
+    font-weight: 700;
+    opacity: 0.9;
+    transform: rotate(90deg);
+    line-height: 1;
+    margin: -1px 0;
+}
+
+body:not(.light-theme) .maid-diary-update-bubble {
+    background: #2c2a3a !important;
+    border-color: #4a485f;
+    color: #d8d2c9 !important;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+}
+
+.valet-diary-update-bubble {
+    background: #f9fbff !important;
+    border-color: #d0dbe8;
+    color: #374151 !important;
+}
+
+.valet-diary-update-bubble .diary-update-title {
+    color: #3f5872;
+}
+
+.valet-diary-update-bubble .diary-update-meta,
+.valet-diary-update-bubble .diary-maid-name,
+.valet-diary-update-bubble .diary-folder-name {
+    color: #607d9a;
+}
+
+.valet-diary-update-bubble .diary-maid-name,
+.valet-diary-update-bubble .diary-folder-name {
+    background: rgba(96, 125, 154, 0.08);
+}
+
+body:not(.light-theme) .diary-update-header {
+    border-bottom-color: #4a485f;
+}
+
+body:not(.light-theme) .diary-update-title {
+    color: #ffb74d;
+}
+
+body:not(.light-theme) .diary-update-meta {
+    color: #b0bec5;
+}
+
+body:not(.light-theme) .diary-update-side {
+    border-color: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+body:not(.light-theme) .diary-update-before {
+    border-left-color: #7f7f90;
+}
+
+body:not(.light-theme) .diary-update-after {
+    border-left-color: #66bb6a;
+    background: rgba(102, 187, 106, 0.08);
+}
+
+body:not(.light-theme) .diary-update-label,
+body:not(.light-theme) .diary-update-arrow {
+    color: #a0a0b0;
+}
+
+body:not(.light-theme) .diary-update-content {
+    color: #c5c8c6;
 }
 
 /* --- Maid Diary Dark Theme Overrides --- */
@@ -442,10 +648,38 @@ body:not(.light-theme) .diary-maid-info {
     color: #b0bec5;
 }
 
-body:not(.light-theme) .diary-maid-name {
+body:not(.light-theme) .diary-maid-name,
+body:not(.light-theme) .diary-folder-name {
     color: #ffcc80;
     /* Lighter shade of the title color */
     background: rgba(255, 183, 77, 0.1);
+}
+
+body:not(.light-theme) .valet-diary-bubble,
+body:not(.light-theme) .valet-diary-update-bubble {
+    background: #263241 !important;
+    border-color: #3e536b;
+    color: #d4dde8 !important;
+}
+
+body:not(.light-theme) .valet-diary-bubble .diary-title,
+body:not(.light-theme) .valet-diary-update-bubble .diary-update-title {
+    color: #90caf9;
+}
+
+body:not(.light-theme) .valet-diary-bubble .diary-date,
+body:not(.light-theme) .valet-diary-bubble .diary-maid-info,
+body:not(.light-theme) .valet-diary-bubble .diary-maid-name,
+body:not(.light-theme) .valet-diary-bubble .diary-folder-name,
+body:not(.light-theme) .valet-diary-update-bubble .diary-update-meta,
+body:not(.light-theme) .valet-diary-update-bubble .diary-maid-name,
+body:not(.light-theme) .valet-diary-update-bubble .diary-folder-name {
+    color: #bbdefb;
+    background: rgba(144, 202, 249, 0.1);
+}
+
+body:not(.light-theme) .diary-meta-separator {
+    color: #7f7f90;
 }
 
 body:not(.light-theme) .diary-content {
@@ -777,11 +1011,11 @@ body.light-theme {
     color: var(--table-header-text-color);
 }
 
-/* Optional: Re-enable for alternating rows if desired for both themes */
+/* Optional: Re-enable for alternating rows if desired for both themes:
 .md-content tr:nth-child(even) td {
-    /* background-color: var(--table-row-even-bg-color); */
-    /* Commented out for now, can be enabled */
+    background-color: var(--table-row-even-bg-color);
 }
+*/
 
 .md-content tr:hover td {
     background-color: var(--table-row-hover-bg-color);
@@ -1375,10 +1609,120 @@ body.light-theme .vcp-tool-result-truncated-notice:hover {
     /* Center the diagram */
 }
 
-.mermaid svg {
+.mermaid-viewer {
+    position: relative;
+    width: 100%;
     max-width: 100%;
-    /* Ensure SVG is responsive */
+    box-sizing: border-box;
+    border: 1px solid rgba(128, 128, 128, 0.22);
+    border-radius: 10px;
+    background:
+        radial-gradient(circle at 18px 18px, rgba(128, 128, 128, 0.12) 1px, transparent 1px),
+        color-mix(in srgb, var(--bg-color, #202124) 94%, transparent);
+    background-size: 18px 18px, auto;
+    overflow: hidden;
+}
+
+.mermaid-viewer-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 8px;
+    background: linear-gradient(180deg, rgba(20, 20, 24, 0.72), rgba(20, 20, 24, 0.42));
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(8px);
+}
+
+.mermaid-viewer-btn {
+    min-width: 32px;
+    height: 28px;
+    padding: 0 9px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.10);
+    color: #f5f7fb;
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+}
+
+.mermaid-viewer-btn:hover {
+    background: rgba(100, 210, 255, 0.22);
+    border-color: rgba(100, 210, 255, 0.5);
+    transform: translateY(-1px);
+}
+
+.mermaid-viewer-btn:active {
+    transform: translateY(0);
+}
+
+.mermaid-viewer-viewport {
+    position: relative;
+    width: 100%;
+    min-height: 220px;
+    max-height: min(68vh, 720px);
+    overflow: hidden;
+    cursor: grab;
+    touch-action: none;
+}
+
+.mermaid-viewer-viewport.dragging {
+    cursor: grabbing;
+}
+
+.mermaid-viewer-canvas {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 100%;
+    min-height: 220px;
+    padding: 24px;
+    box-sizing: border-box;
+    transform-origin: 0 0;
+    transition: transform 0.08s linear;
+    will-change: transform;
+}
+
+.mermaid-viewer-viewport.dragging .mermaid-viewer-canvas {
+    transition: none;
+}
+
+.mermaid svg,
+.mermaid-viewer-canvas svg {
+    max-width: none;
     height: auto;
+    user-select: none;
+}
+
+body.light-theme .mermaid-viewer {
+    border-color: rgba(30, 64, 100, 0.16);
+    background:
+        radial-gradient(circle at 18px 18px, rgba(30, 64, 100, 0.12) 1px, transparent 1px),
+        color-mix(in srgb, var(--bg-color, #ffffff) 96%, #eef6ff 4%);
+    background-size: 18px 18px, auto;
+}
+
+body.light-theme .mermaid-viewer-toolbar {
+    background: linear-gradient(180deg, rgba(245, 249, 255, 0.88), rgba(245, 249, 255, 0.62));
+    border-bottom-color: rgba(30, 64, 100, 0.12);
+}
+
+body.light-theme .mermaid-viewer-btn {
+    border-color: rgba(30, 64, 100, 0.18);
+    background: rgba(30, 64, 100, 0.06);
+    color: #1f2a37;
+}
+
+body.light-theme .mermaid-viewer-btn:hover {
+    background: rgba(25, 118, 210, 0.12);
+    border-color: rgba(25, 118, 210, 0.32);
 }
 
 .mermaid-error {
@@ -1474,12 +1818,27 @@ body:not(.light-theme) .mermaid-error {
     /* 🟢 添加最小高度过渡，防止高度塌陷导致的滚动跳动 */
 }
 
-.vcp-html-preview-toggle {
+.vcp-codeblock-actions {
     position: absolute;
     top: 8px;
     right: 8px;
     z-index: 10;
-    padding: 4px 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    max-width: calc(100% - 16px);
+    pointer-events: none;
+}
+
+.vcp-codeblock-actions > button {
+    pointer-events: auto;
+}
+
+.vcp-html-preview-toggle,
+.vcp-code-copy-button {
+    padding: 4px 10px;
+    min-height: 28px;
     background: rgba(0, 0, 0, 0.5);
     backdrop-filter: blur(4px);
     color: white;
@@ -1488,19 +1847,88 @@ body:not(.light-theme) .mermaid-error {
     cursor: pointer;
     font-size: 12px;
     font-weight: 500;
-    display: flex;
+    display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 4px;
-    transition: all 0.2s ease;
+    line-height: 1;
+    transition: background 0.2s ease, border-color 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
+    user-select: none;
 }
 
-.vcp-html-preview-toggle:hover {
+.vcp-html-preview-toggle:hover,
+.vcp-code-copy-button:hover {
     background: rgba(0, 0, 0, 0.7);
-    transform: scale(1.05);
+    transform: translateY(-1px);
 }
 
-.vcp-html-preview-toggle span {
+.vcp-html-preview-toggle:disabled,
+.vcp-code-copy-button:disabled {
+    cursor: default;
+    opacity: 0.82;
+    transform: none;
+}
+
+.vcp-code-copy-button.copied {
+    background: rgba(34, 197, 94, 0.78);
+    border-color: rgba(134, 239, 172, 0.55);
+}
+
+.vcp-code-copy-button.failed {
+    background: rgba(239, 68, 68, 0.78);
+    border-color: rgba(252, 165, 165, 0.55);
+}
+
+.vcp-html-preview-toggle span,
+.vcp-code-copy-button span {
     pointer-events: none;
+}
+
+.md-content pre.vcp-codeblock-with-copy {
+    position: relative;
+}
+
+.md-content pre.vcp-codeblock-with-copy .vcp-code-copy-button {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 4;
+    opacity: 0;
+}
+
+.md-content pre.vcp-codeblock-with-copy:hover .vcp-code-copy-button,
+.md-content pre.vcp-codeblock-with-copy:focus-within .vcp-code-copy-button,
+.md-content pre.vcp-codeblock-with-copy .vcp-code-copy-button:disabled {
+    opacity: 1;
+}
+
+.vcp-code-copy-icon {
+    font-size: 12px;
+}
+
+body.light-theme .vcp-html-preview-toggle,
+body.light-theme .vcp-code-copy-button {
+    background: rgba(255, 255, 255, 0.78);
+    color: #1f2a37;
+    border-color: rgba(30, 64, 100, 0.18);
+}
+
+body.light-theme .vcp-html-preview-toggle:hover,
+body.light-theme .vcp-code-copy-button:hover {
+    background: rgba(255, 255, 255, 0.94);
+    border-color: rgba(25, 118, 210, 0.32);
+}
+
+body.light-theme .vcp-code-copy-button.copied {
+    background: rgba(34, 197, 94, 0.18);
+    color: #14532d;
+    border-color: rgba(22, 163, 74, 0.35);
+}
+
+body.light-theme .vcp-code-copy-button.failed {
+    background: rgba(244, 63, 94, 0.16);
+    color: #881337;
+    border-color: rgba(225, 29, 72, 0.34);
 }
 
 .vcp-html-preview-frame {
@@ -1628,41 +2056,274 @@ body.light-theme .vcp-thought-chain-bubble {
     margin-left: 10px;
 }
 
+/* --- Tool Call Summary Bubble --- */
+.vcp-tool-call-summary-bubble {
+    display: block !important;
+    width: fit-content;
+    max-width: 95%;
+    margin: 10px 0 12px 0 !important;
+    padding: 10px 14px !important;
+    border-radius: 12px !important;
+    border: 1px solid var(--tool-summary-border-color, rgba(100, 210, 255, 0.22));
+    background: var(--tool-summary-bg, linear-gradient(145deg, rgba(40, 70, 105, 0.22), rgba(24, 42, 70, 0.30))) !important;
+    color: var(--tool-summary-text-color, var(--primary-text));
+    box-shadow: var(--tool-summary-shadow, 0 6px 18px rgba(0, 0, 0, 0.18));
+    font-family: var(--vcp-tool-card-font-family, var(--vcp-chat-font-family, 'Segoe UI', 'Roboto', sans-serif)) !important;
+    font-size: 0.92em !important;
+    line-height: 1.5;
+    box-sizing: border-box;
+    backdrop-filter: blur(6px);
+}
+
+.vcp-tool-call-summary-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding-bottom: 7px;
+    border-bottom: 1px solid var(--tool-summary-header-border-color, rgba(255, 255, 255, 0.10));
+}
+
+.vcp-tool-call-summary-icon {
+    font-size: 1.08em;
+    opacity: 0.9;
+}
+
+.vcp-tool-call-summary-title {
+    font-weight: 700;
+    color: var(--tool-summary-title-color, #64d2ff);
+    letter-spacing: 0.02em;
+}
+
+.vcp-tool-call-summary-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    align-items: center;
+}
+
+.vcp-tool-call-summary-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--tool-summary-chip-border, rgba(255, 255, 255, 0.12));
+    background: var(--tool-summary-chip-bg, rgba(255, 255, 255, 0.06));
+    color: var(--tool-summary-chip-color, var(--primary-text));
+    font-size: 0.9em;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.vcp-tool-call-summary-tool {
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 18em;
+}
+
+.vcp-tool-call-summary-status {
+    font-weight: 700;
+    font-size: 0.86em;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: var(--tool-summary-status-bg, rgba(255, 255, 255, 0.14));
+    color: var(--tool-summary-status-text, #ffffff);
+    line-height: 1.35;
+}
+
+.vcp-tool-call-summary-chip.status-success {
+    --tool-summary-chip-color: #bbf7d0;
+    --tool-summary-chip-bg: rgba(34, 197, 94, 0.20);
+    --tool-summary-chip-border: rgba(74, 222, 128, 0.45);
+    --tool-summary-status-bg: #16a34a;
+    --tool-summary-status-text: #ffffff;
+}
+
+.vcp-tool-call-summary-chip.status-timeout {
+    --tool-summary-chip-color: #fde68a;
+    --tool-summary-chip-bg: rgba(245, 158, 11, 0.20);
+    --tool-summary-chip-border: rgba(251, 191, 36, 0.48);
+    --tool-summary-status-bg: #d97706;
+    --tool-summary-status-text: #ffffff;
+}
+
+.vcp-tool-call-summary-chip.status-failure {
+    --tool-summary-chip-color: #fecdd3;
+    --tool-summary-chip-bg: rgba(244, 63, 94, 0.20);
+    --tool-summary-chip-border: rgba(251, 113, 133, 0.48);
+    --tool-summary-status-bg: #e11d48;
+    --tool-summary-status-text: #ffffff;
+}
+
+.vcp-tool-call-summary-chip.status-rejected {
+    --tool-summary-chip-color: #fed7aa;
+    --tool-summary-chip-bg: rgba(249, 115, 22, 0.20);
+    --tool-summary-chip-border: rgba(251, 146, 60, 0.48);
+    --tool-summary-status-bg: #ea580c;
+    --tool-summary-status-text: #ffffff;
+}
+
+.vcp-tool-call-summary-chip.status-cancelled,
+.vcp-tool-call-summary-chip.status-skipped {
+    --tool-summary-chip-color: #ddd6fe;
+    --tool-summary-chip-bg: rgba(139, 92, 246, 0.20);
+    --tool-summary-chip-border: rgba(167, 139, 250, 0.42);
+    --tool-summary-status-bg: #7c3aed;
+    --tool-summary-status-text: #ffffff;
+}
+
+.vcp-tool-call-summary-chip.status-unknown {
+    --tool-summary-chip-color: #e2e8f0;
+    --tool-summary-chip-bg: rgba(100, 116, 139, 0.22);
+    --tool-summary-chip-border: rgba(148, 163, 184, 0.38);
+    --tool-summary-status-bg: #64748b;
+    --tool-summary-status-text: #ffffff;
+}
+
+body.light-theme .vcp-tool-call-summary-chip.status-success {
+    --tool-summary-chip-color: #14532d;
+    --tool-summary-chip-bg: rgba(34, 197, 94, 0.14);
+    --tool-summary-chip-border: rgba(22, 163, 74, 0.35);
+    --tool-summary-status-bg: #15803d;
+}
+
+body.light-theme .vcp-tool-call-summary-chip.status-timeout {
+    --tool-summary-chip-color: #78350f;
+    --tool-summary-chip-bg: rgba(245, 158, 11, 0.16);
+    --tool-summary-chip-border: rgba(217, 119, 6, 0.36);
+    --tool-summary-status-bg: #b45309;
+}
+
+body.light-theme .vcp-tool-call-summary-chip.status-failure {
+    --tool-summary-chip-color: #881337;
+    --tool-summary-chip-bg: rgba(244, 63, 94, 0.14);
+    --tool-summary-chip-border: rgba(225, 29, 72, 0.34);
+    --tool-summary-status-bg: #be123c;
+}
+
+body.light-theme .vcp-tool-call-summary-chip.status-rejected {
+    --tool-summary-chip-color: #7c2d12;
+    --tool-summary-chip-bg: rgba(249, 115, 22, 0.15);
+    --tool-summary-chip-border: rgba(234, 88, 12, 0.36);
+    --tool-summary-status-bg: #c2410c;
+}
+
+body.light-theme .vcp-tool-call-summary-chip.status-cancelled,
+body.light-theme .vcp-tool-call-summary-chip.status-skipped {
+    --tool-summary-chip-color: #4c1d95;
+    --tool-summary-chip-bg: rgba(139, 92, 246, 0.14);
+    --tool-summary-chip-border: rgba(124, 58, 237, 0.32);
+    --tool-summary-status-bg: #6d28d9;
+}
+
+body.light-theme .vcp-tool-call-summary-chip.status-unknown {
+    --tool-summary-chip-color: #334155;
+    --tool-summary-chip-bg: rgba(100, 116, 139, 0.12);
+    --tool-summary-chip-border: rgba(71, 85, 105, 0.28);
+    --tool-summary-status-bg: #475569;
+}
+
+.vcp-tool-call-summary-raw {
+    color: var(--tool-summary-muted-color, var(--secondary-text));
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+body.light-theme .vcp-tool-call-summary-bubble {
+    --tool-summary-bg: linear-gradient(145deg, rgba(245, 249, 255, 0.96), rgba(229, 239, 250, 0.92));
+    --tool-summary-border-color: rgba(25, 118, 210, 0.18);
+    --tool-summary-header-border-color: rgba(25, 118, 210, 0.12);
+    --tool-summary-title-color: #1565c0;
+    --tool-summary-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+    --tool-summary-text-color: #1f2937;
+}
+
 /* --- Role Divider --- */
 .vcp-role-divider {
     display: flex;
     align-items: center;
-    justify-content: center;
-    margin: 15px 0;
-    font-size: 0.85em;
-    color: var(--primary-text);
-    opacity: 0.7;
+    justify-content: flex-start;
+    gap: 10px;
+    margin: 12px 0 10px 0;
+    font-size: 0.78em;
+    color: var(--role-divider-color, var(--secondary-text, #94a3b8));
+    opacity: 0.82;
     user-select: none;
     clear: both;
+    letter-spacing: 0.03em;
 }
 
-.vcp-role-divider::before,
+.vcp-role-divider::before {
+    content: "";
+    width: 22px;
+    height: 1px;
+    flex: 0 0 22px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.55;
+}
+
 .vcp-role-divider::after {
     content: "";
+    height: 1px;
     flex: 1;
-    border-bottom: 1px dashed var(--border-color, #ccc);
-    margin: 0 15px;
+    min-width: 28px;
+    max-width: 220px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, currentColor 0%, color-mix(in srgb, currentColor 28%, transparent) 45%, transparent 100%);
+    opacity: 0.35;
+}
+
+.vcp-role-divider .divider-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    line-height: 1.45;
+    font-weight: 600;
+    white-space: nowrap;
 }
 
 .vcp-role-divider.role-system {
-    color: #e67e22;
+    --role-divider-color: #f59e0b;
 }
 
 .vcp-role-divider.role-assistant {
-    color: #3498db;
+    --role-divider-color: #38bdf8;
 }
 
 .vcp-role-divider.role-user {
-    color: #2ecc71;
+    --role-divider-color: #34d399;
 }
 
 .vcp-role-divider.type-end {
-    opacity: 0.5;
+    opacity: 0.58;
+}
+
+.vcp-role-divider.type-end::before {
+    width: 14px;
+    flex-basis: 14px;
+}
+
+.vcp-role-divider.type-end .divider-text {
+    font-weight: 500;
+}
+
+body.light-theme .vcp-role-divider.role-system {
+    --role-divider-color: #b45309;
+}
+
+body.light-theme .vcp-role-divider.role-assistant {
+    --role-divider-color: #0369a1;
+}
+
+body.light-theme .vcp-role-divider.role-user {
+    --role-divider-color: #047857;
 }
 
 /* --- VCPdesktop Push Placeholder --- */

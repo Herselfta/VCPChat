@@ -91,6 +91,7 @@
     <div id="desktop-context-menu" class="desktop-context-menu">
         <button class="desktop-context-menu-item" data-action="favorite">⭐ 收藏</button>
         <button class="desktop-context-menu-item" data-action="refresh" style="display:none;">🔄 刷新</button>
+        <button class="desktop-context-menu-item" data-action="code-edit" style="display:none;">💻 代码编辑</button>
         <div class="desktop-context-menu-divider"></div>
         <button class="desktop-context-menu-item" data-action="bring-front">⏫ 置顶</button>
         <button class="desktop-context-menu-item" data-action="move-up">⬆ 上移一层</button>
@@ -369,7 +370,6 @@
          模块化脚本加载（严格按依赖顺序）
          ============================================================ -->
     <!-- Pretext 文本布局引擎 -->
-    <script src="../modules/renderer/pretext.bundle.js"></script>
     <script src="../modules/renderer/pretext-bridge.js"></script>
     <!-- 1. 核心层：状态 & 常量（无依赖） -->
     <script src="core/state.js"></script>
