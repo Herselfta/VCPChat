@@ -4,8 +4,12 @@
 import { tools } from './renderer_modules/config.js';
 import * as canvasHandler from './renderer_modules/ui/canvas-handler.js';
 import * as dynamicImageHandler from './renderer_modules/ui/dynamic-image-handler.js';
+import { ToolManager, ToolManagerUI } from './renderer_modules/tool-manager.js';
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // --- 全局工具集合（合并 config.js + user tools）---
+    let allTools = { ...tools }; // 初始为config.js的工具
+
     // --- 元素获取 ---
     const toolGrid = document.getElementById('tool-grid');
     const toolDetailView = document.getElementById('tool-detail-view');
@@ -101,6 +105,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
+        // 加载用户工具并合并到allTools
+        const userTools = settings.vcpht_userTools || {};
+        allTools = { ...tools, ...userTools }; // user优先覆盖config
+
         initializeUI();
     }
 
@@ -167,7 +175,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             background: rgba(255,152,0,0.15); color: var(--highlight-text);
             white-space: nowrap; font-weight: 600;
         `;
-        const totalTools = Object.keys(tools).length;
+        const totalTools = Object.keys(allTools).length;
         countBadge.textContent = `共${totalTools} 个`;
 
         searchBar.appendChild(searchInput);
@@ -176,8 +184,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         toolGrid.appendChild(searchBar);
 
         // 生成工具卡片
-        for (const toolName in tools) {
-            const tool = tools[toolName];
+        for (const toolName in allTools) {
+            const tool = allTools[toolName];
             const category = getCategoryForTool(toolName);
             const isFav = favorites.includes(toolName);
 
@@ -291,7 +299,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         currentToolName = toolName;
 
-        const tool = tools[toolName];
+        const tool = allTools[toolName];
         toolTitle.textContent = tool.displayName;
         toolDescription.textContent = tool.description;
         
@@ -341,7 +349,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function buildToolForm(toolName) {
-        const tool = tools[toolName];
+        const tool = allTools[toolName];
         toolForm.innerHTML = '';
         const paramsContainer = document.createElement('div');
         paramsContainer.id = 'params-container';
@@ -1073,6 +1081,27 @@ document.addEventListener('DOMContentLoaded', async () => {
         saveSettings().catch(e => console.warn('History save failed:', e));
     }
 
+    function renderMarkdownBlock(markdownText, className = 'markdown-result') {
+        const div = document.createElement('div');
+        div.className = className;
+        const text = String(markdownText ?? '');
+        if (window.marked) {
+            const parser = typeof window.marked.parse === 'function'
+                ? window.marked.parse.bind(window.marked)
+                : (window.marked.marked && typeof window.marked.marked === 'function' ? window.marked.marked.bind(window.marked) : null);
+            if (parser) {
+                div.innerHTML = parser(text);
+                return div;
+            }
+        }
+        div.textContent = text;
+        return div;
+    }
+
+    function appendMarkdownToResult(markdownText, className) {
+        resultContainer.appendChild(renderMarkdownBlock(markdownText, className));
+    }
+
     function renderResult(data, toolName, duration = '') {
         resultContainer.innerHTML = '';
 
@@ -1138,9 +1167,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (content && Array.isArray(content.content)) {
             content.content.forEach(item => {
                 if (item.type === 'text') {
-                    const pre = document.createElement('pre');
-                    pre.textContent = item.text;
-                    resultContainer.appendChild(pre);
+                    appendMarkdownToResult(item.text, 'markdown-result tool-text-result');
                 } else if (item.type === 'image_url' && item.image_url && item.image_url.url) {
                     const imgElement = document.createElement('img');
                     imgElement.src = item.image_url.url;
@@ -1152,13 +1179,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             imgElement.src = content;
             resultContainer.appendChild(imgElement);
         } else if (typeof content === 'string') {
-            const div = document.createElement('div');
-            if (window.marked && typeof window.marked.parse === 'function') {
-                div.innerHTML = window.marked.parse(content);
-            } else {
-                div.textContent = content;
-            }
-            resultContainer.appendChild(div);
+            appendMarkdownToResult(content);
         } else if (toolName === 'TavilySearch' && content && (content.results || content.images)) {
             const searchResultsWrapper = document.createElement('div');
             searchResultsWrapper.className = 'tavily-search-results';
@@ -1195,13 +1216,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const url = document.createElement('p');
                     url.className = 'tavily-result-url';
                     url.textContent = result.url;
-                    const snippet = document.createElement('div');
-                    snippet.className = 'tavily-result-snippet';
-                    if (window.marked && typeof window.marked.parse === 'function') {
-                        snippet.innerHTML = window.marked.parse(result.content);
-                    } else {
-                        snippet.textContent = result.content;
-                    }
+                    const snippet = renderMarkdownBlock(result.content, 'tavily-result-snippet markdown-result');
                     resultItem.appendChild(title);
                     resultItem.appendChild(url);
                     resultItem.appendChild(snippet);
@@ -1220,11 +1235,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 imgElement.src = imageUrl;
                 resultContainer.appendChild(imgElement);
             } else if (typeof textResult === 'string') {
-                if (window.marked && typeof window.marked.parse === 'function') {
-                    resultContainer.innerHTML += window.marked.parse(textResult);
-                } else {
-                    resultContainer.textContent = textResult;
-                }
+                appendMarkdownToResult(textResult);
             } else {
                 const pre = document.createElement('pre');
                 pre.textContent = JSON.stringify(content, null, 2);
@@ -1421,6 +1432,48 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (workflowBtn) {
             workflowBtn.addEventListener('click', openWorkflowEditor);
         }
+
+        // Tab切换逻辑
+        const toolTabBtn = document.getElementById('tool-tab-btn');
+        const manageTabBtn = document.getElementById('manage-tab-btn');
+        const toolGridEl = document.getElementById('tool-grid');
+        const managePanelEl = document.getElementById('manage-panel');
+
+        if (toolTabBtn && manageTabBtn && toolGridEl && managePanelEl) {
+            toolTabBtn.addEventListener('click', () => {
+                toolTabBtn.classList.add('tab-btn-active');
+                manageTabBtn.classList.remove('tab-btn-active');
+                toolGridEl.style.display = 'grid';
+                managePanelEl.style.display = 'none';
+                toolDetailView.style.display = 'none'; // 隐藏工具详情
+            });
+
+            manageTabBtn.addEventListener('click', async () => {
+                manageTabBtn.classList.add('tab-btn-active');
+                toolTabBtn.classList.remove('tab-btn-active');
+                toolGridEl.style.display = 'none';
+                managePanelEl.style.display = 'block';
+                toolDetailView.style.display = 'none';
+
+                // 初始化管理面板（首次点击时）
+                if (!window.toolManagerUIInitialized) {
+                    await window.toolManagerUI.init('manage-panel');
+                    window.toolManagerUIInitialized = true;
+                }
+            });
+        }
+
+        // 初始化工具管理器（但不立即渲染UI）
+        window.toolManager = new ToolManager();
+        window.toolManagerUI = new ToolManagerUI(window.toolManager);
+        window.toolManagerUIInitialized = false;
+
+        // 暴露刷新工具网格的函数供tool-manager调用
+        window.refreshToolGrid = async () => {
+            await initializeApp(); // 重新加载settings并合并allTools
+            renderToolGrid(); // 重新渲染工具网格
+        };
+
         renderToolGrid();
         loadAndProcessWallpaper();
         setupImageViewer();
