@@ -96,26 +96,7 @@ function initialize(context) {
     const appDataRoot = path.dirname(USER_DATA_DIR);
     AVATAR_IMAGE_DIR = path.join(appDataRoot, 'avatarimage');
 
-    ipcMain.handle('get-agents-metadata', async () => {
-        if (cachedMetadata) return cachedMetadata;
-        
-        try {
-            const agents = await ipcMain.invoke('get-agents');
-            if (agents.error) return agents;
-            
-            cachedMetadata = agents.map(a => ({
-                id: a.id,
-                name: a.name,
-                avatarUrl: a.avatarUrl,
-                avatarCalculatedColor: a.config?.avatarCalculatedColor
-            }));
-            return cachedMetadata;
-        } catch (error) {
-            return { error: error.message };
-        }
-    });
-
-    ipcMain.handle('get-agents', async () => {
+    const getAgentsList = async () => {
         if (cachedAgents) return cachedAgents;
 
         try {
@@ -211,7 +192,28 @@ function initialize(context) {
             console.error('获取Agent列表失败:', error);
             return { error: error.message };
         }
+    };
+
+    ipcMain.handle('get-agents-metadata', async () => {
+        if (cachedMetadata) return cachedMetadata;
+        
+        try {
+            const agents = await getAgentsList();
+            if (agents.error) return agents;
+            
+            cachedMetadata = agents.map(a => ({
+                id: a.id,
+                name: a.name,
+                avatarUrl: a.avatarUrl,
+                avatarCalculatedColor: a.config?.avatarCalculatedColor
+            }));
+            return cachedMetadata;
+        } catch (error) {
+            return { error: error.message };
+        }
     });
+
+    ipcMain.handle('get-agents', getAgentsList);
 
     ipcMain.handle('save-combined-item-order', async (event, orderedItemsWithTypes) => {
         try {
