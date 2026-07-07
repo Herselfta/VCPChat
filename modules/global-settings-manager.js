@@ -244,6 +244,12 @@ export async function handleSaveGlobalSettings(e, deps) {
         if (typeof window.syncQuickUpstreamProviderSelect === 'function') {
             window.syncQuickUpstreamProviderSelect();
         }
+        
+        // 刷新模型列表
+        if (chatAPI.refreshModels) {
+            chatAPI.refreshModels().catch(err => console.error('Failed to refresh models on save:', err));
+        }
+
         uiHelperFunctions.showToastNotification('全局设置已保存！部分设置（如通知URL/Key）可能需要重新连接生效。');
         uiHelperFunctions.closeModal('globalSettingsModal');
         if (refs.globalSettings.get().vcpLogUrl && refs.globalSettings.get().vcpLogKey) {

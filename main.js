@@ -671,6 +671,8 @@ if (!gotTheLock) {
                 const vcpServerUrl = settings.vcpServerUrl;
                 const vcpApiKey = settings.vcpApiKey; // Get the API key
 
+                console.log(`[Main - fetchAndCacheModels] Read activeUpstreamProvider:`, settings.activeUpstreamProvider);
+
                 if (!vcpServerUrl) {
                     console.warn('[Main] VCP Server URL is not configured. Cannot fetch models.');
                     cachedModels = []; // Clear cache if URL is not set
@@ -682,10 +684,28 @@ if (!gotTheLock) {
                 const modelsUrl = new URL('/v1/models', baseUrl).toString();
 
                 console.log(`[Main] Fetching models from: ${modelsUrl}`);
-                const response = await fetch(modelsUrl, {
-                    headers: {
-                        'Authorization': `Bearer ${vcpApiKey}` // Add the Authorization header
+                
+                const headers = {
+                    'Authorization': `Bearer ${vcpApiKey}`
+                };
+
+                // 如果激活了自定义上游服务商，在获取模型列表时，将对应的 URL 和 Key 作为请求头传递
+                if (settings.activeUpstreamProvider && settings.activeUpstreamProvider !== 'default' && Array.isArray(settings.upstreamProviders)) {
+                    const activeProv = settings.upstreamProviders.find(p => p.name === settings.activeUpstreamProvider);
+                    if (activeProv) {
+                        if (activeProv.url) {
+                            headers['x-vcp-api-url'] = activeProv.url;
+                            headers['x-upstream-api-url'] = activeProv.url;
+                        }
+                        if (activeProv.key) {
+                            headers['x-vcp-api-key'] = activeProv.key;
+                            headers['x-upstream-api-key'] = activeProv.key;
+                        }
                     }
+                }
+
+                const response = await fetch(modelsUrl, {
+                    headers: headers
                 });
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);

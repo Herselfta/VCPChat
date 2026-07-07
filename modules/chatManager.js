@@ -413,6 +413,11 @@ window.chatManager = (() => {
         itemListManager.highlightActiveItem(itemId, itemType);
         if(mainRendererFunctions.displaySettingsForItem) mainRendererFunctions.displaySettingsForItem();
 
+        // 渲染顶部快速模型选择器
+        if (typeof window.syncQuickModelSelect === 'function') {
+            window.syncQuickModelSelect();
+        }
+
         try {
             let topics;
             if (itemType === 'agent') {

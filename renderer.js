@@ -1736,6 +1736,14 @@ function syncQuickUpstreamProviderSelect() {
                 try {
                     await chatAPI.saveSettings({ activeUpstreamProvider: val });
                     uiHelperFunctions.showToastNotification(`服务商已切换为: ${quickSelect.options[quickSelect.selectedIndex].text}`);
+                    
+                    // 重新获取模型列表！
+                    if (chatAPI.refreshModels) {
+                        await chatAPI.refreshModels();
+                        if (typeof window.syncQuickModelSelect === 'function') {
+                            await window.syncQuickModelSelect();
+                        }
+                    }
                 } catch (err) {
                     console.error('Failed to save active provider setting:', err);
                 }
@@ -1745,6 +1753,88 @@ function syncQuickUpstreamProviderSelect() {
     }
 }
 window.syncQuickUpstreamProviderSelect = syncQuickUpstreamProviderSelect;
+
+async function syncQuickModelSelect() {
+    const quickModelSelect = document.getElementById('quickModelSelect');
+    if (!quickModelSelect) return;
+
+    const currentItem = window.currentSelectedItem;
+    if (!currentItem || currentItem.type !== 'agent') {
+        quickModelSelect.style.display = 'none';
+        return;
+    }
+
+    quickModelSelect.style.display = 'inline-block';
+    
+    // 获取已缓存的模型
+    let models = [];
+    try {
+        models = await chatAPI.getCachedModels();
+    } catch (e) {
+        console.warn('Failed to fetch cached models:', e);
+    }
+    
+    // 渲染 Option
+    quickModelSelect.innerHTML = '';
+    const activeModel = (currentItem.config || currentItem).model || 'gemini-pro';
+    
+    const currentOpt = document.createElement('option');
+    currentOpt.value = activeModel;
+    currentOpt.textContent = activeModel;
+    quickModelSelect.appendChild(currentOpt);
+
+    if (Array.isArray(models)) {
+        models.forEach(model => {
+            if (model.id && model.id !== activeModel) {
+                const opt = document.createElement('option');
+                opt.value = model.id;
+                opt.textContent = model.id;
+                quickModelSelect.appendChild(opt);
+            }
+        });
+    }
+
+    quickModelSelect.value = activeModel;
+
+    // 绑定 change 事件
+    if (!quickModelSelect.dataset.boundChange) {
+        quickModelSelect.addEventListener('change', async (e) => {
+            const newModel = e.target.value;
+            const item = window.currentSelectedItem;
+            if (item && item.type === 'agent') {
+                const config = item.config || item;
+                config.model = newModel;
+                
+                // 同时更新设置表单里的输入框（如果存在）
+                const agentModelInput = document.getElementById('agentModel');
+                if (agentModelInput) {
+                    agentModelInput.value = newModel;
+                    agentModelInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    agentModelInput.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+
+                console.log(`[Quick Switch Model] Switching Agent ${item.id} model to: ${newModel}`);
+                try {
+                    await chatAPI.saveAgentConfig(item.id, { model: newModel });
+                    uiHelperFunctions.showToastNotification(`当前 Agent 模型已切换为: ${newModel}`);
+                } catch (err) {
+                    console.error('Failed to save agent model config:', err);
+                }
+            }
+        });
+        quickModelSelect.dataset.boundChange = 'true';
+    }
+
+    // 监听模型更新 IPC 并自动刷新下拉列表
+    if (window.electronAPI && window.electronAPI.onModelsUpdated && !quickModelSelect.dataset.boundIpc) {
+        window.electronAPI.onModelsUpdated(() => {
+            console.log('[Quick Switch Model] Models updated, refreshing selector.');
+            syncQuickModelSelect();
+        });
+        quickModelSelect.dataset.boundIpc = 'true';
+    }
+}
+window.syncQuickModelSelect = syncQuickModelSelect;
 
 function clampChatBubbleWidthPercent(value, fallback) {
     const parsed = Number.parseInt(value, 10);
