@@ -485,6 +485,9 @@
             <header class="chat-header">
                 <h3 id="currentChatAgentName">选择一个Agent开始聊天</h3>
                 <div class="chat-actions">
+                    <select id="quickUpstreamProviderSelect" class="quick-provider-select" title="快速切换上游服务商">
+                        <!-- Will be dynamically populated -->
+                    </select>
                     <button id="toggleAssistantBtn" class="header-button" title="左键划词助手/右键折叠侧栏">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -884,6 +887,23 @@
                                     </div>
                                     <button type="button" id="addNetworkPathBtn" class="sidebar-button small-button"
                                         style="margin-top: 8px; width: auto; padding: 4px 10px;">添加路径</button>
+                                </div>
+
+                                <hr class="settings-divider" style="margin: 20px 0; border: none; border-top: 1px solid var(--border-color);">
+                                <h4 style="margin-bottom: 12px; color: var(--text-primary);">上游服务商管理 (动态覆盖)</h4>
+                                <div class="settings-form-group">
+                                    <label for="activeUpstreamProvider">当前激活的上游服务商:</label>
+                                    <select id="activeUpstreamProvider" name="activeUpstreamProvider">
+                                        <!-- Will be dynamically populated -->
+                                    </select>
+                                </div>
+                                <div class="settings-form-group">
+                                    <label>服务商配置列表:</label>
+                                    <div id="upstreamProvidersListContainer" style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px;">
+                                        <!-- Will be dynamically populated with inputs -->
+                                    </div>
+                                    <button type="button" id="addUpstreamProviderBtn" class="sidebar-button small-button"
+                                        style="margin-top: 8px; width: auto; padding: 4px 10px;">添加服务商</button>
                                 </div>
                             </div>
 

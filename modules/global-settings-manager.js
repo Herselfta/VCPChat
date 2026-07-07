@@ -99,6 +99,23 @@ export async function handleSaveGlobalSettings(e, deps) {
         enableContextSanitizer: document.getElementById('enableContextSanitizer').checked,
         contextSanitizerDepth: parseInt(document.getElementById('contextSanitizerDepth').value, 10) || 0,
         enableAiMessageButtons: document.getElementById('enableAiMessageButtons').checked,
+        activeUpstreamProvider: document.getElementById('activeUpstreamProvider')?.value || 'default',
+        upstreamProviders: (() => {
+            const providerRows = document.querySelectorAll('.upstream-provider-row');
+            const list = Array.from(providerRows).map(row => {
+                const displayName = row.querySelector('.prov-display-name').value.trim();
+                const url = row.querySelector('.prov-url').value.trim();
+                const key = row.querySelector('.prov-key').value;
+                const name = row.dataset.name || `prov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                return { name, displayName, url, key };
+            }).filter(p => p.displayName);
+
+            // 始终保留 default
+            if (!list.some(p => p.name === 'default')) {
+                list.unshift({ name: 'default', displayName: '默认后端 (config.env)', url: '', key: '' });
+            }
+            return list;
+        })()
     };
 
     // 处理规则模式选择
@@ -223,6 +240,9 @@ export async function handleSaveGlobalSettings(e, deps) {
         Object.assign(refs.globalSettings.get(), newSettings);
         if (typeof window.applyChatBubbleLayoutSettings === 'function') {
             window.applyChatBubbleLayoutSettings(refs.globalSettings.get());
+        }
+        if (typeof window.syncQuickUpstreamProviderSelect === 'function') {
+            window.syncQuickUpstreamProviderSelect();
         }
         uiHelperFunctions.showToastNotification('全局设置已保存！部分设置（如通知URL/Key）可能需要重新连接生效。');
         uiHelperFunctions.closeModal('globalSettingsModal');

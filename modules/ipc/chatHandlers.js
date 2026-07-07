@@ -858,12 +858,29 @@ function initialize(mainWindow, context) {
                 return { error: `请求体序列化失败: ${serializeError.message}` };
             }
 
+            const headers = {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${vcpApiKey}`
+            };
+
+            // 如果激活了自定义上游服务商，将对应的 URL 和 Key 作为请求头传递给 VCPToolBox
+            if (settings.activeUpstreamProvider && settings.activeUpstreamProvider !== 'default' && Array.isArray(settings.upstreamProviders)) {
+                const activeProv = settings.upstreamProviders.find(p => p.name === settings.activeUpstreamProvider);
+                if (activeProv) {
+                    if (activeProv.url) {
+                        headers['X-VCP-API-URL'] = activeProv.url;
+                        headers['X-Upstream-API-URL'] = activeProv.url;
+                    }
+                    if (activeProv.key) {
+                        headers['X-VCP-API-Key'] = activeProv.key;
+                        headers['X-Upstream-API-Key'] = activeProv.key;
+                    }
+                }
+            }
+
             const response = await fetch(finalVcpUrl, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${vcpApiKey}`
-                },
+                headers: headers,
                 body: serializedBody
             });
 

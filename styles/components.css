@@ -409,6 +409,31 @@ body.light-theme .chat-actions .header-button:hover {
     color: #ffffff;
 }
 
+.chat-actions .quick-provider-select {
+    background-color: var(--input-bg);
+    color: var(--primary-text);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 0 8px;
+    height: 32px;
+    font-size: 0.85em;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s, background-color 0.2s;
+    margin-right: 4px;
+    box-sizing: border-box;
+    max-width: 140px;
+}
+
+body.light-theme .chat-actions .quick-provider-select {
+    border-color: rgba(51, 51, 51, 0.08);
+    background-color: #f7f7f7;
+}
+
+.chat-actions .quick-provider-select:hover {
+    border-color: var(--highlight-text);
+}
+
 #sendMessageBtn, #attachFileBtn, #quickNewTopicBtn, #emoticonTriggerBtn {
     border: none;
     display: flex;

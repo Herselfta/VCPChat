@@ -1701,11 +1701,50 @@ async function loadAndApplyGlobalSettings() {
             window.messageRenderer.setUserAvatar(globalSettings.userAvatarUrl);
             window.messageRenderer.setUserAvatarColor(globalSettings.userAvatarCalculatedColor);
         }
+        syncQuickUpstreamProviderSelect();
     } else {
         console.warn('加载全局设置失败或无设置:', settings?.error);
         if (window.notificationRenderer) window.notificationRenderer.updateVCPLogStatus({ status: 'error', message: 'VCPLog未配置' }, vcpLogConnectionStatusDiv);
     }
 }
+
+function syncQuickUpstreamProviderSelect() {
+    const quickSelect = document.getElementById('quickUpstreamProviderSelect');
+    if (quickSelect) {
+        quickSelect.innerHTML = '';
+        const providers = Array.isArray(globalSettings.upstreamProviders) ? globalSettings.upstreamProviders : [];
+        providers.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = p.displayName || p.name;
+            quickSelect.appendChild(opt);
+        });
+        quickSelect.value = globalSettings.activeUpstreamProvider || 'default';
+
+        if (!quickSelect.dataset.boundChange) {
+            quickSelect.addEventListener('change', async (e) => {
+                const val = e.target.value;
+                globalSettings.activeUpstreamProvider = val;
+                
+                // 同步全局设置面板里的选择器（如果已经打开/存在）
+                const modalSelect = document.getElementById('activeUpstreamProvider');
+                if (modalSelect) {
+                    modalSelect.value = val;
+                }
+
+                console.log(`[Quick Switch] Switching active upstream provider to: ${val}`);
+                try {
+                    await chatAPI.saveSettings({ activeUpstreamProvider: val });
+                    uiHelperFunctions.showToastNotification(`服务商已切换为: ${quickSelect.options[quickSelect.selectedIndex].text}`);
+                } catch (err) {
+                    console.error('Failed to save active provider setting:', err);
+                }
+            });
+            quickSelect.dataset.boundChange = 'true';
+        }
+    }
+}
+window.syncQuickUpstreamProviderSelect = syncQuickUpstreamProviderSelect;
 
 function clampChatBubbleWidthPercent(value, fallback) {
     const parsed = Number.parseInt(value, 10);
@@ -2238,6 +2277,82 @@ async function syncGlobalSettingsToUI() {
     if (middleClickAdvancedContainer) middleClickAdvancedContainer.style.display = globalSettings.enableMiddleClickQuickAction ? 'block' : 'none';
     const middleClickAdvancedSettings = document.getElementById('middleClickAdvancedSettings');
     if (middleClickAdvancedSettings) middleClickAdvancedSettings.style.display = globalSettings.enableMiddleClickAdvanced ? 'block' : 'none';
+
+    // 同步上游服务商快捷选择器
+    syncQuickUpstreamProviderSelect();
+
+    // 渲染上游服务商列表与当前选择状态
+    const activeUpstreamProviderSelect = document.getElementById('activeUpstreamProvider');
+    const upstreamProvidersListContainer = document.getElementById('upstreamProvidersListContainer');
+
+    if (activeUpstreamProviderSelect) {
+        activeUpstreamProviderSelect.innerHTML = '';
+        const providers = Array.isArray(globalSettings.upstreamProviders) ? globalSettings.upstreamProviders : [];
+        
+        providers.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = p.displayName || p.name;
+            activeUpstreamProviderSelect.appendChild(opt);
+        });
+
+        activeUpstreamProviderSelect.value = globalSettings.activeUpstreamProvider || 'default';
+    }
+
+    if (upstreamProvidersListContainer) {
+        upstreamProvidersListContainer.innerHTML = '';
+        const providers = Array.isArray(globalSettings.upstreamProviders) ? globalSettings.upstreamProviders : [];
+        
+        providers.forEach(p => {
+            const isDefault = p.name === 'default';
+            const row = document.createElement('div');
+            row.className = 'upstream-provider-row';
+            row.dataset.name = p.name;
+            row.style.cssText = 'display: flex; gap: 8px; align-items: center; width: 100%; margin-bottom: 8px;';
+            row.innerHTML = `
+                <input type="text" class="prov-display-name" value="${p.displayName || ''}" placeholder="服务商名称" style="flex: 1.5; margin: 0; padding: 6px 10px;" ${isDefault ? 'disabled' : ''} required>
+                <input type="url" class="prov-url" value="${p.url || ''}" placeholder="API 地址" style="flex: 2.5; margin: 0; padding: 6px 10px;" ${isDefault ? 'disabled' : ''}>
+                <input type="password" class="prov-key" value="${p.key || ''}" placeholder="API Key" style="flex: 2; margin: 0; padding: 6px 10px;" ${isDefault ? 'disabled' : ''}>
+                <button type="button" class="remove-prov-btn sidebar-button small-button" style="width: auto; padding: 4px 8px; margin: 0; background-color: var(--danger-color); color: white; display: ${isDefault ? 'none' : 'block'}; font-size: 0.85em;">删除</button>
+            `;
+            upstreamProvidersListContainer.appendChild(row);
+        });
+
+        // 绑定删除按钮事件
+        upstreamProvidersListContainer.querySelectorAll('.remove-prov-btn').forEach(btn => {
+            btn.addEventListener('click', (ev) => {
+                const row = ev.target.closest('.upstream-provider-row');
+                if (row) {
+                    row.remove();
+                }
+            });
+        });
+    }
+
+    // 绑定「添加服务商」按钮
+    const addUpstreamProviderBtn = document.getElementById('addUpstreamProviderBtn');
+    if (addUpstreamProviderBtn && !addUpstreamProviderBtn.dataset.boundAddProv) {
+        addUpstreamProviderBtn.addEventListener('click', () => {
+            const container = document.getElementById('upstreamProvidersListContainer');
+            if (container) {
+                const row = document.createElement('div');
+                row.className = 'upstream-provider-row';
+                row.style.cssText = 'display: flex; gap: 8px; align-items: center; width: 100%; margin-bottom: 8px;';
+                const name = `prov_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                row.dataset.name = name;
+                row.innerHTML = `
+                    <input type="text" class="prov-display-name" placeholder="服务商名称" style="flex: 1.5; margin: 0; padding: 6px 10px;" required>
+                    <input type="url" placeholder="API 地址" class="prov-url" style="flex: 2.5; margin: 0; padding: 6px 10px;">
+                    <input type="password" placeholder="API Key" class="prov-key" style="flex: 2; margin: 0; padding: 6px 10px;">
+                    <button type="button" class="remove-prov-btn sidebar-button small-button" style="width: auto; padding: 4px 8px; margin: 0; background-color: var(--danger-color); color: white; font-size: 0.85em;">删除</button>
+                `;
+                container.appendChild(row);
+
+                row.querySelector('.remove-prov-btn').addEventListener('click', () => row.remove());
+            }
+        });
+        addUpstreamProviderBtn.dataset.boundAddProv = 'true';
+    }
 }
 
 // --- Chat Functionality ---

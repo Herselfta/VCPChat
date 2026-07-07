@@ -34,6 +34,16 @@ class SettingsValidator {
         }
         
         // 数组检查
+        if (!Array.isArray(validated.upstreamProviders)) {
+            validated.upstreamProviders = [
+                { name: 'default', displayName: '默认后端 (config.env)', url: '', key: '' },
+                { name: 'siliconflow', displayName: 'SiliconFlow', url: 'https://api.siliconflow.cn', key: '' },
+                { name: 'deepseek', displayName: 'DeepSeek', url: 'https://api.deepseek.com', key: '' },
+                { name: 'openai', displayName: 'OpenAI', url: 'https://api.openai.com', key: '' }
+            ];
+            hasIssues = true;
+        }
+
         if (!Array.isArray(validated.networkNotesPaths)) {
             validated.networkNotesPaths = [];
             hasIssues = true;
@@ -80,6 +90,13 @@ class SettingsManager extends EventEmitter {
             userName: '用户',
             vcpServerUrl: '',
             vcpApiKey: '',
+            activeUpstreamProvider: 'default',
+            upstreamProviders: [
+                { name: 'default', displayName: '默认后端 (config.env)', url: '', key: '' },
+                { name: 'siliconflow', displayName: 'SiliconFlow', url: 'https://api.siliconflow.cn', key: '' },
+                { name: 'deepseek', displayName: 'DeepSeek', url: 'https://api.deepseek.com', key: '' },
+                { name: 'openai', displayName: 'OpenAI', url: 'https://api.openai.com', key: '' }
+            ],
             fileKey: '',
             vcpLogUrl: '',
             vcpLogKey: '',
