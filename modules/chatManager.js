@@ -350,15 +350,8 @@ window.chatManager = (() => {
     }
 
     async function selectItem(itemId, itemType, itemName, itemAvatarUrl, itemFullConfig) {
-        // 心流锁激活时，不允许切换Agent
-        if (window.flowlockManager && window.flowlockManager.getState && window.flowlockManager.getState().isActive) {
-            if (uiHelper && uiHelper.showToastNotification) {
-                uiHelper.showToastNotification('心流锁运行中，无法切换 Agent。请先停止心流锁。', 'warning');
-            }
-            console.log('[ChatManager] Blocked agent switch due to active Flowlock');
-            return;
-        }
-        
+        // Flowlock 只绑定目标 Agent 的 Topic，不再阻止用户切换到其他 Agent。
+        // 当重新进入已锁 Agent 时，下面会优先恢复它的锁定 Topic。
         // Stop any previous watcher when switching items
         if (electronAPI.watcherStop) {
             await electronAPI.watcherStop();
@@ -402,6 +395,7 @@ window.chatManager = (() => {
 
         const itemTypeLabel = itemType === 'group' ? ' (群组)' : '';
         currentChatNameH3.textContent = `与 ${itemName}${itemTypeLabel} 聊天中`;
+        window.flowlockManager?.syncCurrentHeaderIndicator?.();
         setCurrentItemActionButtonText(currentItemActionBtn, itemType === 'group' ? '新建群聊话题' : '新建聊天话题');
         currentItemActionBtn.title = `为 ${itemName} 新建${itemType === 'group' ? '群聊话题' : '聊天话题'}`;
         currentItemActionBtn.style.display = 'inline-flex';
@@ -428,8 +422,14 @@ window.chatManager = (() => {
 
             if (topics && !topics.error && topics.length > 0) {
                 let topicToLoadId = topics[0].id;
+                const lockedTopicId = itemType === 'agent'
+                    ? window.flowlockManager?.getLockedTopicId?.(itemId)
+                    : null;
                 const rememberedTopicId = localStorage.getItem(`lastActiveTopic_${itemId}_${itemType}`);
-                if (rememberedTopicId && topics.some(t => t.id === rememberedTopicId)) {
+
+                if (lockedTopicId && topics.some(t => t.id === lockedTopicId)) {
+                    topicToLoadId = lockedTopicId;
+                } else if (rememberedTopicId && topics.some(t => t.id === rememberedTopicId)) {
                     topicToLoadId = rememberedTopicId;
                 }
                 currentTopicIdRef.set(topicToLoadId);
@@ -486,15 +486,19 @@ window.chatManager = (() => {
     }
  
     async function selectTopic(topicId) {
-        // 心流锁激活时，不允许切换话题
-        if (window.flowlockManager && window.flowlockManager.getState && window.flowlockManager.getState().isActive) {
-            if (uiHelper && uiHelper.showToastNotification) {
-                uiHelper.showToastNotification('心流锁运行中，无法切换话题。请先停止心流锁。', 'warning');
+        const selectedItemForLock = currentSelectedItemRef.get();
+        const lockedTopicId = selectedItemForLock?.type === 'agent'
+            ? window.flowlockManager?.getLockedTopicId?.(selectedItemForLock.id)
+            : null;
+
+        if (lockedTopicId && topicId !== lockedTopicId) {
+            if (uiHelper?.showToastNotification) {
+                uiHelper.showToastNotification('该 Agent 正在锁定话题中运行，请先停止心流锁再切换话题。', 'warning');
             }
-            console.log('[ChatManager] Blocked topic switch due to active Flowlock');
+            console.log(`[ChatManager] Blocked topic switch for locked Agent ${selectedItemForLock.id}: ${lockedTopicId} -> ${topicId}`);
             return;
         }
-        
+
         let currentTopicId = currentTopicIdRef.get();
         if (currentTopicId === topicId) {
             return;
@@ -1455,6 +1459,11 @@ window.chatManager = (() => {
             uiHelper.showToastNotification("请先选择一个项目。", 'error');
             return;
         }
+
+        if (itemType === 'agent' && window.flowlockManager?.isAgentLocked?.(itemId)) {
+            uiHelper.showToastNotification('该 Agent 正在心流锁中，无法新建或切换话题。', 'warning');
+            return;
+        }
         
         const currentSelectedItem = currentSelectedItemRef.get();
         const itemName = currentSelectedItem.name || (itemType === 'group' ? "当前群组" : "当前助手");
@@ -1507,6 +1516,11 @@ window.chatManager = (() => {
     async function handleCreateBranch(selectedMessage) {
         const currentSelectedItem = currentSelectedItemRef.get();
         const currentTopicId = currentTopicIdRef.get();
+
+        if (currentSelectedItem?.type === 'agent' && window.flowlockManager?.isAgentLocked?.(currentSelectedItem.id)) {
+            uiHelper.showToastNotification('该 Agent 正在心流锁中，无法创建并切换到分支话题。', 'warning');
+            return;
+        }
         const currentChatHistory = currentChatHistoryRef.get();
         const itemType = currentSelectedItem.type;
 
