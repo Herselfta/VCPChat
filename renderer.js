@@ -17,6 +17,7 @@ let globalSettings = {
     enableThoughtChainInjection: false, // 元思考注入上下文开关
     fileKey: '',
     enableWideChatLayout: false,
+    chatPresentationMode: 'bubble',
     chatBubbleMaxWidthDefault: 82,
     chatBubbleMaxWidthNotifications: 90,
     chatBubbleMaxWidthNarrow: 85,
@@ -941,6 +942,7 @@ import { setupEventListeners } from './modules/event-listeners.js';
     }
 
     try {
+        setupChatPresentationQuickSwitcher();
         await loadAndApplyGlobalSettings();
         await window.itemListManager.loadItems(); // Load both agents and groups
 
@@ -1550,6 +1552,13 @@ async function loadAndApplyGlobalSettings() {
         if (globalSettings.sidebarWidth && leftSidebar) {
             leftSidebar.style.width = `${globalSettings.sidebarWidth}px`;
         }
+        if (leftSidebar) {
+            const sidebarIsActive = globalSettings.sidebarActive !== false;
+            const avatarOnly = sidebarIsActive && globalSettings.sidebarAvatarOnly === true;
+            leftSidebar.classList.toggle('active', sidebarIsActive);
+            leftSidebar.classList.toggle('avatar-only', avatarOnly);
+            document.querySelector('.main-content')?.classList.toggle('sidebar-active', sidebarIsActive);
+        }
         if (globalSettings.notificationsSidebarWidth && rightNotificationsSidebar) {
             if (rightNotificationsSidebar.classList.contains('active')) {
                 rightNotificationsSidebar.style.width = `${globalSettings.notificationsSidebarWidth}px`;
@@ -1720,6 +1729,209 @@ async function syncQuickModelSelect() {
     }
 }
 window.syncQuickModelSelect = syncQuickModelSelect;
+
+const CHAT_PRESENTATION_MODES = Object.freeze(['bubble', 'panel', 'immersive']);
+const CHAT_PRESENTATION_MODE_CLASSES = CHAT_PRESENTATION_MODES.map(
+    mode => `chat-presentation-${mode}`
+);
+
+function normalizeChatPresentationMode(mode) {
+    return CHAT_PRESENTATION_MODES.includes(mode) ? mode : 'bubble';
+}
+
+function isChatVisuallyNearBottom(scrollContainer, threshold = 64) {
+    const messages = scrollContainer?.querySelector('.chat-messages');
+    if (!scrollContainer || !messages) return true;
+
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const messagesRect = messages.getBoundingClientRect();
+    return Math.abs(messagesRect.bottom - containerRect.bottom) <= threshold;
+}
+
+function captureChatPresentationScrollAnchor() {
+    const scrollContainer = document.querySelector('.chat-messages-container');
+    if (!scrollContainer) return null;
+
+    if (isChatVisuallyNearBottom(scrollContainer)) {
+        return { scrollContainer, stickToBottom: true };
+    }
+
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const visibleMessages = Array.from(
+        scrollContainer.querySelectorAll('.message-item[data-message-id]')
+    )
+        .map(element => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.bottom > containerRect.top && rect.top < containerRect.bottom)
+        .sort((a, b) => a.rect.top - b.rect.top);
+
+    const anchor = visibleMessages[0];
+    if (!anchor) {
+        return {
+            scrollContainer,
+            stickToBottom: false,
+            scrollTop: scrollContainer.scrollTop
+        };
+    }
+
+    return {
+        scrollContainer,
+        stickToBottom: false,
+        messageId: anchor.element.dataset.messageId,
+        viewportOffset: anchor.rect.top - containerRect.top,
+        scrollTop: scrollContainer.scrollTop
+    };
+}
+
+function restoreChatPresentationScrollAnchor(anchor) {
+    if (!anchor?.scrollContainer?.isConnected) return;
+
+    const { scrollContainer } = anchor;
+    if (anchor.stickToBottom) {
+        const messages = scrollContainer.querySelector('.chat-messages');
+        if (!messages) return;
+        const containerRect = scrollContainer.getBoundingClientRect();
+        const messagesRect = messages.getBoundingClientRect();
+        scrollContainer.scrollTop += messagesRect.bottom - containerRect.bottom;
+        return;
+    }
+
+    const anchorElement = anchor.messageId
+        ? scrollContainer.querySelector(`.message-item[data-message-id="${CSS.escape(anchor.messageId)}"]`)
+        : null;
+
+    if (!anchorElement) {
+        scrollContainer.scrollTop = anchor.scrollTop;
+        return;
+    }
+
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const currentOffset = anchorElement.getBoundingClientRect().top - containerRect.top;
+    scrollContainer.scrollTop += currentOffset - anchor.viewportOffset;
+}
+
+function syncChatPresentationModeControls(mode = globalSettings.chatPresentationMode) {
+    const normalizedMode = normalizeChatPresentationMode(mode);
+    const modeControl = document.querySelector(
+        `input[name="chatPresentationMode"][value="${normalizedMode}"]`
+    );
+    if (modeControl) modeControl.checked = true;
+
+    document.querySelectorAll('.chat-presentation-quick-option').forEach((option) => {
+        const isActive = option.dataset.presentationMode === normalizedMode;
+        option.classList.toggle('active', isActive);
+        option.setAttribute('aria-checked', String(isActive));
+        option.tabIndex = isActive ? 0 : -1;
+    });
+
+    const bubbleOnlySettings = document.getElementById('userChatBubbleSettings');
+    if (bubbleOnlySettings) {
+        bubbleOnlySettings.hidden = normalizedMode !== 'bubble';
+    }
+
+    const bubbleWidthSettings = document.getElementById('chatBubbleWidthSettings');
+    if (bubbleWidthSettings) {
+        bubbleWidthSettings.hidden = normalizedMode !== 'bubble';
+    }
+}
+
+function setupChatPresentationQuickSwitcher() {
+    const switcher = document.getElementById('chat-presentation-quick-switcher');
+    const options = Array.from(switcher?.querySelectorAll('.chat-presentation-quick-option') || []);
+    if (!switcher || !options.length || switcher.dataset.bound === 'true') return;
+
+    const selectMode = async (option) => {
+        const mode = option?.dataset.presentationMode;
+        if (!mode) return;
+        await applyChatPresentationMode(mode, {
+            persist: true,
+            preserveScroll: true,
+            notify: false,
+            source: 'title-bar-quick-switcher'
+        });
+    };
+
+    options.forEach((option) => {
+        option.addEventListener('click', () => selectMode(option));
+        option.addEventListener('keydown', (event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+
+            const currentIndex = Math.max(0, options.indexOf(option));
+            let nextIndex = currentIndex;
+            if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + options.length) % options.length;
+            if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % options.length;
+            if (event.key === 'Home') nextIndex = 0;
+            if (event.key === 'End') nextIndex = options.length - 1;
+
+            options[nextIndex].focus();
+            selectMode(options[nextIndex]);
+        });
+    });
+
+    switcher.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        document.getElementById('themes-btn')?.focus();
+    });
+
+    switcher.dataset.bound = 'true';
+    syncChatPresentationModeControls(globalSettings.chatPresentationMode);
+}
+
+async function applyChatPresentationMode(mode, options = {}) {
+    const {
+        persist = false,
+        preserveScroll = true,
+        notify = false,
+        source = 'unknown'
+    } = options;
+    const normalizedMode = normalizeChatPresentationMode(mode);
+    const previousMode = normalizeChatPresentationMode(globalSettings.chatPresentationMode);
+    const anchor = preserveScroll ? captureChatPresentationScrollAnchor() : null;
+
+    document.body?.classList.remove(...CHAT_PRESENTATION_MODE_CLASSES);
+    document.body?.classList.add(`chat-presentation-${normalizedMode}`);
+    globalSettings.chatPresentationMode = normalizedMode;
+    window.globalSettings = globalSettings;
+    syncChatPresentationModeControls(normalizedMode);
+
+    if (window.pretextBridge?.setPresentationMode) {
+        window.pretextBridge.setPresentationMode(normalizedMode);
+    } else {
+        window.pretextBridge?.clearAll?.();
+    }
+    window.messageRenderer?.refreshLayoutDependentState?.();
+
+    if (anchor) {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => restoreChatPresentationScrollAnchor(anchor));
+        });
+    }
+
+    if (!persist || normalizedMode === previousMode) {
+        return { success: true, mode: normalizedMode };
+    }
+
+    try {
+        const result = await chatAPI.saveSettings({ chatPresentationMode: normalizedMode });
+        if (!result?.success) {
+            throw new Error(result?.error || '设置保存失败');
+        }
+        if (notify) {
+            uiHelperFunctions?.showToastNotification?.('聊天显示模式已切换。', 'success');
+        }
+        return { success: true, mode: normalizedMode, source };
+    } catch (error) {
+        await applyChatPresentationMode(previousMode, {
+            persist: false,
+            preserveScroll: true,
+            notify: false,
+            source: 'rollback'
+        });
+        uiHelperFunctions?.showToastNotification?.(`聊天显示模式保存失败：${error.message}`, 'error');
+        return { success: false, mode: previousMode, error };
+    }
+}
 
 function clampChatBubbleWidthPercent(value, fallback) {
     const parsed = Number.parseInt(value, 10);
@@ -1960,6 +2172,11 @@ function applyChatBubbleLayoutSettings(settings = globalSettings) {
     if (document.body) {
         document.body.classList.toggle('chat-wide-layout', resolvedSettings.enableWideChatLayout === true);
     }
+    applyChatPresentationMode(resolvedSettings.chatPresentationMode, {
+        persist: false,
+        preserveScroll: false,
+        source: 'layout-settings'
+    });
     applyUserChatBubbleUiState(resolvedSettings);
 }
 
@@ -2046,6 +2263,8 @@ async function syncGlobalSettingsToUI() {
     safeSet('chatDiaryFontCustom', globalSettings.chatDiaryFontCustom || '');
     safeSet('chatToolFontPreset', globalSettings.chatToolFontPreset || 'system');
     safeSet('chatToolFontCustom', globalSettings.chatToolFontCustom || '');
+    const presentationMode = normalizeChatPresentationMode(globalSettings.chatPresentationMode);
+    safeCheck(`chatPresentationMode${presentationMode[0].toUpperCase()}${presentationMode.slice(1)}`, true);
     safeCheck('chatLayoutModeWide', globalSettings.enableWideChatLayout === true);
     safeCheck('chatLayoutModeNormal', globalSettings.enableWideChatLayout !== true);
     safeCheck('enableUserChatBubbleUi', globalSettings.enableUserChatBubbleUi !== false);
@@ -2064,6 +2283,7 @@ async function syncGlobalSettingsToUI() {
     syncChatFontControls();
     syncWideChatLayoutControls();
     syncUserChatBubbleControls();
+    syncChatPresentationModeControls(presentationMode);
 
     const chatFontPresetSelect = document.getElementById('chatFontPreset');
     const chatFontCustomInput = document.getElementById('chatFontCustom');
@@ -2076,6 +2296,7 @@ async function syncGlobalSettingsToUI() {
     const wideModeRadio = document.getElementById('chatLayoutModeWide');
     const normalModeRadio = document.getElementById('chatLayoutModeNormal');
     const userBubbleUiToggle = document.getElementById('enableUserChatBubbleUi');
+    const presentationModeRadios = document.querySelectorAll('input[name="chatPresentationMode"]');
     if (chatFontPresetSelect && !chatFontPresetSelect.dataset.boundFontToggle) {
         chatFontPresetSelect.addEventListener('change', syncChatFontControls);
         chatFontPresetSelect.dataset.boundFontToggle = 'true';
@@ -2120,6 +2341,19 @@ async function syncGlobalSettingsToUI() {
         userBubbleUiToggle.addEventListener('change', syncUserChatBubbleControls);
         userBubbleUiToggle.dataset.boundUserBubbleToggle = 'true';
     }
+    presentationModeRadios.forEach((radio) => {
+        if (radio.dataset.boundPresentationModeToggle) return;
+        radio.addEventListener('change', () => {
+            if (!radio.checked) return;
+            applyChatPresentationMode(radio.value, {
+                persist: true,
+                preserveScroll: true,
+                notify: false,
+                source: 'settings'
+            });
+        });
+        radio.dataset.boundPresentationModeToggle = 'true';
+    });
 
     // User Avatar Preview
     const userAvatarPreview = document.getElementById('userAvatarPreview');
@@ -2521,6 +2755,9 @@ window.showForwardModal = showForwardModal;
 
 // Make globalSettings accessible for notification renderer
 window.applyChatBubbleLayoutSettings = applyChatBubbleLayoutSettings;
+window.applyChatPresentationMode = applyChatPresentationMode;
+window.setChatPresentationMode = applyChatPresentationMode;
+window.normalizeChatPresentationMode = normalizeChatPresentationMode;
 window.globalSettings = globalSettings;
 
 // Make filter functions globally accessible for notification renderer

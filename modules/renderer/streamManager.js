@@ -9,6 +9,8 @@ const accumulatedStreamText = new Map(); // messageId -> string
 const streamSegmentStates = new Map(); // messageId -> { stableCutoff, stableHtml, stableRenderedCutoff, stableBlocks, stableBlockSeq, lastTailText, lastParagraphBoundary }
 let activeStreamingMessageId = null; // Track the currently active streaming message
 const elementContentLengthCache = new WeakMap(); // 跟踪每个元素的内容长度；WeakMap 避免 morphdom 替换节点后的强引用泄漏
+const STREAM_CODE_LINE_SWEEP_DURATION_MS = 2400;
+const STREAM_CODE_MAX_ACTIVE_SWEEPS = 3;
 
 // --- VCPdesktop 流式推送状态 ---
 const desktopPushStates = new Map(); // messageId -> { active, widgetId, buffer, tagBuffer, created, pushTimer, lastPushedLength, lastTokenTime, validated }
@@ -35,8 +37,6 @@ const THINK_START_REGEX = /<think(?:ing)?>/ig;
 const THINK_END_REGEX = /<\/think(?:ing)?>/ig;
 const DAILY_NOTE_START = '<<<DailyNoteStart>>>';
 const DAILY_NOTE_END = '<<<DailyNoteEnd>>>';
-// OpenHerPersona 聊天分条标记：完整出现即成为稳定切点，流式过程中实时分出气泡
-const BURST_MARKER_TOKEN = '<!--brk-->';
 const MARKDOWN_SECTION_BREAK_TOKEN = '---';
 const STREAM_PARAGRAPH_SAFETY_BLOCKS = 1;
 const HTML_ISLAND_MAX_STACK_DEPTH = 128;
@@ -97,6 +97,16 @@ function shouldPreserveStreamElement(fromEl, toEl) {
         return true;
     }
 
+    // 已完成且只高亮过一次的流式代码行是稳定子树。
+    // 保留 Highlight.js 生成的 span，避免下一帧被流式预览中的纯文本覆盖。
+    if (
+        fromEl.classList.contains('vcp-stream-code-line') &&
+        fromEl.dataset.vcpStreamCodeHighlighted === 'true' &&
+        toEl?.dataset?.vcpStreamCodeCompleted === 'true'
+    ) {
+        return true;
+    }
+
     // KaTeX 通常会生成复杂嵌套 DOM，保留已处理结果，等待最终完整渲染统一刷新。
     if (fromEl.closest?.('.katex')) {
         return true;
@@ -144,6 +154,14 @@ function preserveDynamicStreamState(fromEl, toEl) {
 
     if (fromEl.dataset.vcpKey) {
         toEl.dataset.vcpKey = fromEl.dataset.vcpKey;
+    }
+
+    if (fromEl.dataset.vcpStreamCodeAnimated === 'true') {
+        toEl.dataset.vcpStreamCodeAnimated = 'true';
+    }
+
+    if (fromEl.dataset.vcpStreamCodeHighlighted === 'true') {
+        toEl.dataset.vcpStreamCodeHighlighted = 'true';
     }
 }
 
@@ -450,8 +468,7 @@ function getOrCreateStreamSegmentState(messageId) {
             stableBlocks: [],
             stableBlockSeq: 0,
             lastTailText: '',
-            lastParagraphBoundary: 0,
-            burstBubbleCount: 0
+            lastParagraphBoundary: 0
         };
         streamSegmentStates.set(messageId, state);
     }
@@ -533,124 +550,12 @@ function appendNewStableRange(stableBlocksRoot, segmentState, textForRendering, 
         resetStableBlockState(segmentState);
     }
 
-    const appendedBlocks = [];
+    const sourceText = textForRendering.slice(segmentState.stableRenderedCutoff, nextStableCutoff);
+    if (!sourceText) return [];
 
-    while (segmentState.stableRenderedCutoff < nextStableCutoff) {
-        const currentOffset = segmentState.stableRenderedCutoff;
-        const markerIndex = findNextLineOnlyToken(textForRendering, BURST_MARKER_TOKEN, currentOffset);
-        const effectiveMarkerIndex = markerIndex !== -1 && markerIndex < nextStableCutoff ? markerIndex : -1;
-        const sliceEnd = effectiveMarkerIndex === -1 ? nextStableCutoff : effectiveMarkerIndex;
-        const sourceText = textForRendering.slice(currentOffset, sliceEnd);
-
-        if (sourceText) {
-            const html = parseFullStreamContent(sourceText);
-            const blockRecord = appendStableBlockFragment(stableBlocksRoot, segmentState, sourceText, html, options);
-            if (blockRecord) appendedBlocks.push(blockRecord);
-        }
-
-        if (effectiveMarkerIndex === -1) {
-            break;
-        }
-
-        // 独立行 <!--brk--> 作为稳定切点和气泡边界参与源码进度，
-        // 但不渲染进 stable block，避免后续为了分条再解包/搬运已稳定 DOM。
-        segmentState.stableRenderedCutoff = effectiveMarkerIndex + BURST_MARKER_TOKEN.length;
-    }
-
-    return appendedBlocks;
-}
-
-function unwrapStableBlockContainersForBurst(stableBlocksRoot, segmentState) {
-    if (!stableBlocksRoot) return;
-
-    const blockEls = Array.from(stableBlocksRoot.querySelectorAll(':scope > .vcp-stream-stable-block'));
-    if (blockEls.length === 0) return;
-
-    for (const blockEl of blockEls) {
-        const parent = blockEl.parentNode;
-        if (!parent) continue;
-
-        while (blockEl.firstChild) {
-            parent.insertBefore(blockEl.firstChild, blockEl);
-        }
-        blockEl.remove();
-    }
-
-    // burst 分条会重排 stable DOM；后续 stable block 继续追加即可，旧 block 元数据不再依赖 element 引用。
-    for (const block of segmentState.stableBlocks) {
-        block.element = null;
-    }
-}
-
-// 分条流式时给尾部根（"正在打字"的下一条）套上头像行，看起来像新消息正在到来。
-// 收尾阶段会整体重渲染 contentDiv，包装行随之消失。
-function ensureBurstTailRow(contentDiv, tailRoot, messageItem) {
-    if (contentDiv.querySelector('.burst-tail-row')) return;
-    const avatar = messageItem ? messageItem.querySelector('img.chat-avatar') : null;
-    const tailRow = document.createElement('div');
-    tailRow.className = 'burst-row burst-tail-row';
-    if (avatar && avatar.src) {
-        const tailAvatar = document.createElement('img');
-        tailAvatar.className = 'burst-avatar';
-        tailAvatar.src = avatar.src;
-        tailAvatar.alt = '';
-        tailRow.appendChild(tailAvatar);
-    }
-    contentDiv.appendChild(tailRow);
-    tailRow.appendChild(tailRoot);
-}
-
-function createBurstAvatarForMessage(messageItem) {
-    const avatar = messageItem ? messageItem.querySelector('img.chat-avatar') : null;
-    if (!avatar || !avatar.src) return null;
-
-    const burstAvatar = document.createElement('img');
-    burstAvatar.className = 'burst-avatar';
-    burstAvatar.src = avatar.src;
-    burstAvatar.alt = '';
-    return burstAvatar;
-}
-
-function promoteStableBlocksToBurstBubbles(stableBlocksRoot, messageItem) {
-    if (!stableBlocksRoot) return [];
-
-    const wrappers = [];
-    const children = Array.from(stableBlocksRoot.children);
-    let existingBubbleCount = 0;
-
-    for (const child of children) {
-        if (child.classList.contains('burst-row') || child.classList.contains('burst-bubble')) {
-            existingBubbleCount += 1;
-            wrappers.push(child);
-        }
-    }
-
-    const blockEls = children.filter((child) => (
-        child.classList.contains('vcp-stream-stable-block')
-        && child.dataset.vcpBurstWrapped !== 'true'
-    ));
-
-    for (const blockEl of blockEls) {
-        blockEl.dataset.vcpBurstWrapped = 'true';
-        blockEl.classList.add('burst-bubble');
-
-        if (existingBubbleCount === 0) {
-            wrappers.push(blockEl);
-            existingBubbleCount += 1;
-            continue;
-        }
-
-        const row = document.createElement('div');
-        row.className = 'burst-row';
-        const burstAvatar = createBurstAvatarForMessage(messageItem);
-        if (burstAvatar) row.appendChild(burstAvatar);
-        stableBlocksRoot.insertBefore(row, blockEl);
-        row.appendChild(blockEl);
-        wrappers.push(row);
-        existingBubbleCount += 1;
-    }
-
-    return wrappers;
+    const html = parseFullStreamContent(sourceText);
+    const blockRecord = appendStableBlockFragment(stableBlocksRoot, segmentState, sourceText, html, options);
+    return blockRecord ? [blockRecord] : [];
 }
 
 function startsWithAt(text, index, token) {
@@ -687,21 +592,6 @@ function isLineOnlyToken(text, tokenStart, tokenLength) {
     const after = text.slice(tokenStart + tokenLength, lineEnd);
 
     return before.trim() === '' && after.trim() === '';
-}
-
-function findNextLineOnlyToken(text, token, startOffset = 0) {
-    let index = Math.max(0, startOffset);
-    while (index < text.length) {
-        const tokenIndex = text.indexOf(token, index);
-        if (tokenIndex === -1) return -1;
-        if (isLineOnlyToken(text, tokenIndex, token.length)) return tokenIndex;
-        index = tokenIndex + token.length;
-    }
-    return -1;
-}
-
-function hasLineOnlyToken(text, token) {
-    return findNextLineOnlyToken(text, token, 0) !== -1;
 }
 
 function findDisplayMathBlockEnd(text, startIndex, delimiter) {
@@ -1136,17 +1026,6 @@ function findExplicitStablePrefix(text, startOffset = 0) {
             continue;
         }
 
-        if (startsWithAt(text, index, BURST_MARKER_TOKEN)) {
-            if (isLineOnlyToken(text, index, BURST_MARKER_TOKEN.length)) {
-                // 只有独立行的 <!--brk--> 才是 OpenHerPersona 分条触发器；
-                // 行内出现的注释只按普通 Markdown/HTML 内容处理，避免误切分。
-                stableCutoff = index + BURST_MARKER_TOKEN.length;
-                paragraphFloor = stableCutoff;
-            }
-            index += BURST_MARKER_TOKEN.length;
-            continue;
-        }
-
         if (startsWithAt(text, index, MARKDOWN_SECTION_BREAK_TOKEN)) {
             if (isLineOnlyToken(text, index, MARKDOWN_SECTION_BREAK_TOKEN.length)) {
                 // 独立行 Markdown 文档分段符 --- 可作为稳定切点；
@@ -1273,6 +1152,130 @@ function processStreamTailImages(container) {
     });
 }
 
+function highlightCompletedStreamingCodeLine(lineElement) {
+    if (!lineElement || lineElement.dataset.vcpStreamCodeHighlighted === 'true') return;
+    if (!window.hljs) return;
+
+    const codeElement = lineElement.closest('code');
+    const languageClass = codeElement
+        ? Array.from(codeElement.classList).find(className => className.startsWith('language-'))
+        : '';
+    const language = languageClass ? languageClass.slice('language-'.length) : '';
+    const lineText = lineElement.textContent === '\u200b'
+        ? ''
+        : (lineElement.textContent || '');
+
+    try {
+        let highlightedHtml = '';
+
+        if (lineText && language && window.hljs.getLanguage?.(language)) {
+            highlightedHtml = window.hljs.highlight(lineText, {
+                language,
+                ignoreIllegals: true
+            }).value;
+        } else if (lineText) {
+            // 没有语言标记时也只在该行完成时自动检测一次，而不是每帧重复检测。
+            highlightedHtml = window.hljs.highlightAuto(lineText).value;
+        }
+
+        if (highlightedHtml) {
+            lineElement.innerHTML = highlightedHtml;
+        }
+
+        lineElement.dataset.vcpStreamCodeHighlighted = 'true';
+    } catch (error) {
+        // 高亮失败不影响流式显示；仍标记为已尝试，避免每帧重复抛错。
+        lineElement.dataset.vcpStreamCodeHighlighted = 'true';
+    }
+}
+
+function playStreamingCodeLineSweep(lineElement, delayMs = 0) {
+    if (!lineElement || typeof lineElement.animate !== 'function') return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+
+    const isLightTheme = document.body.classList.contains('light-theme');
+    const baseColor = isLightTheme ? '#333333' : '#abb2bf';
+    const colorSweep = isLightTheme
+        ? `linear-gradient(90deg, transparent 0%, transparent 24%, #0077b6 37%, #6f42c1 46%, #d63384 54%, #b26a00 63%, #238636 70%, transparent 82%, transparent 100%)`
+        : `linear-gradient(90deg, transparent 0%, transparent 24%, #61dafb 37%, #c678dd 46%, #ff79c6 54%, #e5c07b 63%, #98c379 70%, transparent 82%, transparent 100%)`;
+    const baseLayer = `linear-gradient(${baseColor}, ${baseColor})`;
+
+    // 双层文字背景：彩色层移动，基色层始终铺满文字。
+    // 不使用 background-color，避免 Chromium 在嵌套 hljs span 上短暂绘制矩形色块。
+    lineElement.style.backgroundImage = `${colorSweep}, ${baseLayer}`;
+    lineElement.style.backgroundSize = '210% 100%, 100% 100%';
+    lineElement.style.backgroundRepeat = 'no-repeat, no-repeat';
+    lineElement.classList.add('vcp-stream-code-line--sweeping');
+    lineElement.style.webkitBackgroundClip = 'text';
+    lineElement.style.backgroundClip = 'text';
+    lineElement.style.webkitTextFillColor = 'transparent';
+    lineElement.style.color = 'transparent';
+
+    const animation = lineElement.animate([
+        { backgroundPosition: '110% 50%, 0 0' },
+        { backgroundPosition: '78% 50%, 0 0', offset: 0.16 },
+        { backgroundPosition: '52% 50%, 0 0', offset: 0.36 },
+        { backgroundPosition: '18% 50%, 0 0', offset: 0.64 },
+        { backgroundPosition: '-12% 50%, 0 0', offset: 0.84 },
+        { backgroundPosition: '-45% 50%, 0 0' }
+    ], {
+        duration: STREAM_CODE_LINE_SWEEP_DURATION_MS,
+        delay: delayMs,
+        easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
+        fill: 'both'
+    });
+
+    animation.addEventListener('finish', () => {
+        if (!lineElement.isConnected) return;
+        lineElement.style.removeProperty('background-image');
+        lineElement.style.removeProperty('background-size');
+        lineElement.style.removeProperty('background-repeat');
+        lineElement.style.removeProperty('-webkit-background-clip');
+        lineElement.style.removeProperty('background-clip');
+        lineElement.style.removeProperty('-webkit-text-fill-color');
+        lineElement.style.removeProperty('color');
+        lineElement.classList.remove('vcp-stream-code-line--sweeping');
+    }, { once: true });
+}
+
+/**
+ * 只处理刚由“输入中”变为“已完成”的稳定行节点。
+ * 行 DOM 已由 parseStreamTailMarkdown 生成并由 morphdom 按 key 复用，这里不再重建 DOM 或运行 hljs。
+ */
+function decorateStreamingCodeLines(container) {
+    if (!container) return;
+
+    const newCompletedLines = Array.from(container.querySelectorAll(
+        '.vcp-stream-code-line[data-vcp-stream-code-completed="true"]:not([data-vcp-stream-code-animated="true"])'
+    ));
+
+    if (newCompletedLines.length === 0) return;
+
+    // 每条新完成行只执行一次语法高亮，并保留其高亮子树。
+    // 所有行立即标记为已处理；突发大块只动画最新几行，避免同时创建大量长动画。
+    newCompletedLines.forEach(lineElement => {
+        highlightCompletedStreamingCodeLine(lineElement);
+        lineElement.dataset.vcpStreamCodeAnimated = 'true';
+    });
+
+    const linesToAnimate = newCompletedLines.slice(-STREAM_CODE_MAX_ACTIVE_SWEEPS);
+
+    // 输出速度很快时，结束更旧的扫光并立即露出其语法色，避免动画队列落后于代码。
+    const activeSweeps = Array.from(container.querySelectorAll('.vcp-stream-code-line--sweeping'));
+    const excessActiveCount = Math.max(
+        0,
+        activeSweeps.length + linesToAnimate.length - STREAM_CODE_MAX_ACTIVE_SWEEPS
+    );
+    activeSweeps.slice(0, excessActiveCount).forEach(lineElement => {
+        lineElement.getAnimations().forEach(animation => animation.finish());
+    });
+
+    // 不再逐行延迟；所有本帧新完成行立即开始，最多并发三条。
+    linesToAnimate.forEach(lineElement => {
+        playStreamingCodeLineSweep(lineElement, 0);
+    });
+}
+
 /**
  * Renders a single frame of the streaming message using morphdom for efficient DOM updates.
  * This version performs minimal processing to keep it fast and avoid destroying JS state.
@@ -1300,57 +1303,19 @@ function renderStreamFrame(messageId) {
     const segmentState = getOrCreateStreamSegmentState(messageId);
 
     const textForRendering = accumulatedStreamText.get(messageId) || "";
-    let nextStableCutoff = findExplicitStablePrefix(textForRendering, segmentState.stableCutoff);
-
-    // burst 流式开始后，stable 区只在下一个独立行 brk 到达时继续推进。
-    // 否则普通段落 stable 会把“正在打字的当前气泡”提前固化成新的 stable block，
-    // 再被原子提升为独立气泡，表现为“所有 stable 都自动分成气泡”。
-    if ((segmentState.burstBubbleCount > 0 || contentDiv.classList.contains('burst-streaming'))
-        && nextStableCutoff > segmentState.stableCutoff
-        && !hasLineOnlyToken(textForRendering.slice(segmentState.stableCutoff, nextStableCutoff), BURST_MARKER_TOKEN)) {
-        nextStableCutoff = segmentState.stableCutoff;
-    }
+    const nextStableCutoff = findExplicitStablePrefix(textForRendering, segmentState.stableCutoff);
 
     // 移除思考指示器
     const streamingIndicator = contentDiv.querySelector('.streaming-indicator, .thinking-indicator');
     if (streamingIndicator) streamingIndicator.remove();
 
     if (nextStableCutoff > segmentState.stableCutoff) {
-        const stableText = textForRendering.slice(0, nextStableCutoff);
-        const newStableText = textForRendering.slice(segmentState.stableRenderedCutoff, nextStableCutoff);
-        const hasBurstMarkerInStable = hasLineOnlyToken(stableText, BURST_MARKER_TOKEN);
-        const hasBurstMarkerInNewStable = hasLineOnlyToken(newStableText, BURST_MARKER_TOKEN);
         segmentState.stableCutoff = nextStableCutoff;
 
         appendNewStableRange(stableBlocksRoot, segmentState, textForRendering, nextStableCutoff, {
             messageId,
             settings: refs.globalSettingsRef?.get?.()
         });
-
-        // OpenHerPersona 聊天分条：一旦稳定区出现 brk，立即进入 burst-streaming。
-        // 流式路径不再解包已稳定 DOM，也不再对 stableBlocksRoot 做全量 split；
-        // 而是按独立行 brk 在源码层切分 stable block，并把每个 stable block 原子提升为气泡。
-        // 这样避免 stable -> burst 之间的 live DOM 拆包/重包中间态，降低透明闪烁和复杂后处理节点抖动。
-        try {
-            let bubbles = [];
-            if (hasBurstMarkerInStable || hasBurstMarkerInNewStable) {
-                contentDiv.classList.add('burst-streaming');
-                if (messageItem) messageItem.dataset.burstRevealed = 'true';
-                bubbles = promoteStableBlocksToBurstBubbles(stableBlocksRoot, messageItem);
-                ensureBurstTailRow(contentDiv, tailRoot, messageItem);
-            }
-            if (bubbles.length > 0) {
-                bubbles.forEach((bubble, index) => {
-                    if (index >= segmentState.burstBubbleCount) {
-                        bubble.classList.add('burst-pending');
-                        bubble.style.animationDelay = '0ms';
-                    }
-                });
-                segmentState.burstBubbleCount = bubbles.length;
-            }
-        } catch (error) {
-            console.warn('[StreamManager] burst bubble split failed:', error);
-        }
     }
 
     const tailText = textForRendering.slice(segmentState.stableCutoff);
@@ -1501,6 +1466,7 @@ function renderStreamFrame(messageId) {
 
     processStreamTailImages(stableRoot);
     processStreamTailImages(tailRoot);
+    decorateStreamingCodeLines(tailRoot);
     segmentState.lastTailText = tailText;
 }
 

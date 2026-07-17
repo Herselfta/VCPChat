@@ -33,6 +33,13 @@ class SettingsValidator {
             hasIssues = true;
         }
         
+        const allowedChatPresentationModes = new Set(['bubble', 'panel', 'immersive']);
+        if (!allowedChatPresentationModes.has(validated.chatPresentationMode)) {
+            validated.chatPresentationMode = 'bubble';
+            hasIssues = true;
+            console.log('Fixed invalid chatPresentationMode');
+        }
+
         // 数组检查
         if (!Array.isArray(validated.upstreamProviders)) {
             validated.upstreamProviders = [
@@ -108,6 +115,7 @@ class SettingsManager extends EventEmitter {
             enableAgentBubbleTheme: false,
             enableSmoothStreaming: false,
             enableWideChatLayout: false,
+            chatPresentationMode: 'bubble',
             chatBubbleMaxWidthDefault: 82,
             chatBubbleMaxWidthNotifications: 90,
             chatBubbleMaxWidthNarrow: 85,
