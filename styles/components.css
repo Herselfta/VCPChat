@@ -937,10 +937,15 @@ body.light-theme .context-menu {
                 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 .context-menu-item {
-    padding: 8px 15px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 5px;
+    padding: 8px 9px;
     color: var(--primary-text);
     cursor: pointer;
     font-size: 0.9em;
+    text-align: left;
 }
 
 /* 消息右键菜单按内容收缩，避免移除全局模式入口后残留过宽的右侧空白。 */
@@ -950,29 +955,18 @@ body.light-theme .context-menu {
     max-width: min(260px, calc(100vw - 12px));
 }
 
-/* 消息右键菜单只保留针对当前消息的操作，维持紧凑左对齐布局。 */
+/* 消息菜单图标较密集，左侧略多留白以维持视觉平衡。 */
 #chatContextMenu > .context-menu-item {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 4px;
-    padding-inline: 6px;
-    text-align: left;
-}
-
-#chatContextMenu .context-menu-item > i:first-child {
-    display: inline-flex;
-    width: 13px;
-    margin-right: 0;
-    flex: 0 0 13px;
-    align-items: center;
-    justify-content: center;
+    gap: 5px;
+    padding-left: 12px;
+    padding-right: 9px;
 }
 
 .context-menu-item > i:first-child {
     display: inline-flex;
-    width: 18px;
-    margin-right: 6px;
+    width: 14px;
+    margin: 0;
+    flex: 0 0 14px;
     align-items: center;
     justify-content: center;
 }
