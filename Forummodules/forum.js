@@ -989,13 +989,29 @@ function findUnescapedDelimiter(text, delimiter, startIndex) {
     return -1;
 }
 
+function looksLikeSafeForumSingleDollarMath(content) {
+    const trimmed = (content || '').trim();
+    if (!trimmed || trimmed.includes('\n') || trimmed.length > 1200) return false;
+
+    const hasExplicitMathSignal = /\\|[\^_=+\-*/<>]|[A-Za-z]\s*\(|\b(?:lim|sum|int|frac|sqrt|text|mathrm|mathbf|alpha|beta|gamma|theta|lambda|mu|sigma|pi|infty)\b/i.test(trimmed);
+    const isSimpleNumericMath = /^[+-]?(?:\d+(?:[.,]\d+)*|\.\d+)(?:\s*(?:%|\\%|‰|°))?$/.test(trimmed);
+
+    // 排除价格串、Shell 变量、模板字符串、表格跨列和普通单词。
+    // 以数字开头的长句即使中间出现减号，也不能因此被判定为数学。
+    if (/^\d/.test(trimmed) && !isSimpleNumericMath) {
+        const isCompactNumericFormula = !/\s+[A-Za-z\u4e00-\u9fff]{2,}/u.test(trimmed) && hasExplicitMathSignal;
+        if (!isCompactNumericFormula) return false;
+    }
+    if (trimmed.startsWith('/') || trimmed.includes('|')) return false;
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) return false;
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) return false;
+
+    return hasExplicitMathSignal || isSimpleNumericMath;
+}
+
 function protectMathExpressions(markdown) {
     const mathMap = new Map();
     let mathId = 0;
-    let output = '';
-    let i = 0;
-    let inFence = false;
-    let atLineStart = true;
 
     const protect = (mathText) => {
         const placeholder = `@@FORUMMATH${mathId}@@`;
@@ -1004,73 +1020,92 @@ function protectMathExpressions(markdown) {
         return placeholder;
     };
 
-    while (i < markdown.length) {
-        if (atLineStart) {
-            const lineEnd = markdown.indexOf('\n', i);
-            const currentLine = markdown.slice(i, lineEnd === -1 ? markdown.length : lineEnd);
-            if (currentLine.trimStart().startsWith('```')) {
-                inFence = !inFence;
-                output += currentLine;
-                if (lineEnd === -1) break;
-                output += '\n';
-                i = lineEnd + 1;
-                atLineStart = true;
-                continue;
+    const protectMathInTextSegment = (source) => {
+        let output = '';
+        let i = 0;
+
+        while (i < source.length) {
+            if (source.startsWith('$$', i)) {
+                const end = findUnescapedDelimiter(source, '$$', i + 2);
+                if (end !== -1) {
+                    output += protect(source.slice(i, end + 2));
+                    i = end + 2;
+                    continue;
+                }
             }
+
+            if (source.startsWith('\\[', i)) {
+                const end = findUnescapedDelimiter(source, '\\]', i + 2);
+                if (end !== -1) {
+                    output += protect(source.slice(i, end + 2));
+                    i = end + 2;
+                    continue;
+                }
+            }
+
+            if (source.startsWith('\\(', i)) {
+                const end = findUnescapedDelimiter(source, '\\)', i + 2);
+                if (end !== -1) {
+                    output += protect(source.slice(i, end + 2));
+                    i = end + 2;
+                    continue;
+                }
+            }
+
+            if (source[i] === '$' && source[i + 1] !== '$') {
+                const previousChar = source[i - 1] || '';
+                const nextChar = source[i + 1] || '';
+
+                if (previousChar !== '\\' && !/\w/.test(previousChar) && nextChar && !/\s/.test(nextChar)) {
+                    let end = i + 1;
+                    while ((end = findUnescapedDelimiter(source, '$', end)) !== -1) {
+                        const nextCloseChar = source[end + 1] || '';
+                        if (!/\w/.test(nextCloseChar)) break;
+                        end++;
+                    }
+
+                    if (end !== -1) {
+                        const content = source.slice(i + 1, end);
+                        if (looksLikeSafeForumSingleDollarMath(content)) {
+                            // 统一转换成明确的 KaTeX 行内定界符，后处理无需再启用宽松 `$...$`。
+                            output += protect(`\\(${content.trim()}\\)`);
+                            i = end + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            output += source[i];
+            i++;
         }
 
-        if (!inFence) {
-            const startsDisplayDollar = markdown.startsWith('$$', i);
-            const startsBracketDisplay = markdown.startsWith('\\[', i);
-            const startsParenInline = markdown.startsWith('\\(', i);
-            const startsInlineDollar = markdown[i] === '$' && markdown[i + 1] !== '$' && !/\s/.test(markdown[i + 1] || '');
+        return output;
+    };
 
-            if (startsDisplayDollar) {
-                const end = findUnescapedDelimiter(markdown, '$$', i + 2);
-                if (end !== -1) {
-                    output += protect(markdown.slice(i, end + 2));
-                    i = end + 2;
-                    atLineStart = false;
-                    continue;
-                }
-            }
+    // 先保护代码围栏，再按 HTML 标签切分。数学定界符只能在同一文本片段内闭合，
+    // 不扫描标签属性，也不会把不同元素中的两个价格跨标签拼成公式。
+    const protectedCodeBlocks = [];
+    const withoutCodeBlocks = markdown.replace(/```[\s\S]*?(?:```|$)/g, (block) => {
+        const placeholder = `@@FORUMCODE${protectedCodeBlocks.length}@@`;
+        protectedCodeBlocks.push(block);
+        return placeholder;
+    });
+    const htmlTagRegex = /<!--[\s\S]*?-->|<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s+(?:"[^"]*"|'[^']*'|[^'"<>])*)?\s*\/?>/g;
+    let output = '';
+    let cursor = 0;
+    let tagMatch;
 
-            if (startsBracketDisplay) {
-                const end = findUnescapedDelimiter(markdown, '\\]', i + 2);
-                if (end !== -1) {
-                    output += protect(markdown.slice(i, end + 2));
-                    i = end + 2;
-                    atLineStart = false;
-                    continue;
-                }
-            }
-
-            if (startsParenInline) {
-                const end = findUnescapedDelimiter(markdown, '\\)', i + 2);
-                if (end !== -1) {
-                    output += protect(markdown.slice(i, end + 2));
-                    i = end + 2;
-                    atLineStart = false;
-                    continue;
-                }
-            }
-
-            if (startsInlineDollar) {
-                const end = findUnescapedDelimiter(markdown, '$', i + 1);
-                if (end !== -1 && !/\s/.test(markdown[end - 1] || '')) {
-                    output += protect(markdown.slice(i, end + 1));
-                    i = end + 1;
-                    atLineStart = false;
-                    continue;
-                }
-            }
-        }
-
-        const char = markdown[i];
-        output += char;
-        atLineStart = char === '\n';
-        i++;
+    while ((tagMatch = htmlTagRegex.exec(withoutCodeBlocks)) !== null) {
+        output += protectMathInTextSegment(withoutCodeBlocks.slice(cursor, tagMatch.index));
+        output += tagMatch[0];
+        cursor = tagMatch.index + tagMatch[0].length;
     }
+    output += protectMathInTextSegment(withoutCodeBlocks.slice(cursor));
+
+    protectedCodeBlocks.forEach((block, index) => {
+        output = output.split(`@@FORUMCODE${index}@@`).join(block);
+    });
 
     return { markdown: output, mathMap };
 }
@@ -1294,10 +1329,11 @@ function renderFullContent(container, markdown, uid) {
                 throwOnError: false,
                 delimiters: [
                     {left: "$$", right: "$$", display: true},
-                    {left: "$", right: "$", display: false},
+                    // 安全的单美元公式已转换为 \(...\)；禁止 KaTeX 绕过判断器跨价格配对。
                     {left: "\\(", right: "\\)", display: false},
                     {left: "\\[", right: "\\]", display: true}
-                ]
+                ],
+                ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
             });
         }
 
@@ -1394,10 +1430,11 @@ function renderFullContent(container, markdown, uid) {
                             throwOnError: false,
                             delimiters: [
                                 {left: "$$", right: "$$", display: true},
-                                {left: "$", right: "$", display: false},
+                                // 与帖子正文保持一致，不允许宽松单美元匹配破坏回复中的 HTML。
                                 {left: "\\(", right: "\\)", display: false},
                                 {left: "\\[", right: "\\]", display: true}
-                            ]
+                            ],
+                            ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
                         });
                     }
                 });

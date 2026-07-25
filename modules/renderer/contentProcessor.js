@@ -1037,9 +1037,8 @@ function looksLikeSafeSingleDollarMath(content) {
     const isSimpleNumericMath = /^[+-]?(?:\d+(?:[.,]\d+)*|\.\d+)(?:\s*(?:%|\\%|‰|°))?$/.test(trimmedContent);
 
     // 跳过价格、价格单位、Shell 变量、模板字符串与 Markdown 表格跨列误匹配。
-    // 但 `$1$`、`$20\%$`、`$2^n$`、`$1/2$` 这类明确闭合的行内数学应放行；
-    // 真正的价格通常是 `$123` 后接普通文本而不是闭合 `$`，不会走到这里。
-    // 否则 Markdown 解析后可能丢失反斜杠，导致后续 KaTeX 把相邻 `$...$` 错配成红色错误文本。
+    // 但 `$1$`、`$20\%$`、`$2^n$`、`$1/2$` 这类明确闭合的行内数学应放行。
+    // 此函数只处理单个 DOM 文本节点，不会跨 HTML 元素配对美元符号。
     if (/^\d/.test(trimmedContent) && !hasExplicitMathSignal && !isSimpleNumericMath) return false;
     if (trimmedContent.startsWith('/')) return false;
     if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedContent)) return false;
@@ -1094,6 +1093,7 @@ function normalizeSafeSingleDollarMathInTextNodes(root) {
 function processRenderedContent(contentDiv, settings = {}) {
     if (!contentDiv) return;
 
+    // 将经严格判定的单美元公式转换为 \(...\)；普通价格保持原始 `$` 文本。
     normalizeSafeSingleDollarMathInTextNodes(contentDiv);
 
     // KaTeX rendering
@@ -1101,7 +1101,8 @@ function processRenderedContent(contentDiv, settings = {}) {
         window.renderMathInElement(contentDiv, {
             delimiters: [
                 {left: "$$", right: "$$", display: true},
-                {left: "$", right: "$", display: false},
+                // 不在此处注册宽松的 `$...$`：否则两个价格会绕过上面的安全判断被强制配对。
+                // 合法单美元公式已经由预解析保护器或 DOM 文本节点规范器转换为 \(...\)。
                 {left: "\\(", right: "\\)", display: false},
                 {left: "\\[", right: "\\]", display: true}
             ],
