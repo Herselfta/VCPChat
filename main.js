@@ -1133,15 +1133,9 @@ if (!gotTheLock) {
             }
         });
 
-        globalShortcut.register('Control+Shift+I', () => {
-            const focusedWindow = BrowserWindow.getFocusedWindow();
-            if (focusedWindow && focusedWindow.webContents && !focusedWindow.webContents.isDestroyed()) {
-                focusedWindow.webContents.toggleDevTools();
-            }
-        });
+        // 移除全局 Control+Shift+I 快捷键，改用菜单栏（Menu）绑定的快捷键，确保仅在窗口处于焦点时生效
 
         const noteMiniShortcutRegistered = globalShortcut.register('Super+Alt+Z', () => {
-            notesHandlers.createOrFocusNoteMiniWindow();
         });
         if (!noteMiniShortcutRegistered) {
             console.warn('[Main] Failed to register global shortcut: Super+Alt+Z');

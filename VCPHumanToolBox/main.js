@@ -31,37 +31,24 @@ function createWindow() {
         }
     });
 
+    // 当窗口具有焦点时，快捷键 F12 与 Ctrl+Shift+I 切换开发者工具（避免全局强占）
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+        if (input.type === 'keyDown') {
+            const isF12 = input.key === 'F12';
+            const isCtrlShiftI = (input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i';
+            if (isF12 || isCtrlShiftI) {
+                mainWindow.webContents.toggleDevTools();
+                event.preventDefault();
+            }
+        }
+    });
+
     // 加载应用的 index.html
     mainWindow.loadFile(path.join(__dirname, 'index.html'));
 }
 // Electron会在初始化完成并且准备好创建浏览器窗口时调用这个方法
 app.whenReady().then(async () => {
     createWindow();
-    
-    // 注册全局快捷键
-    // 注册 F12 快捷键打开开发者工具
-    globalShortcut.register('F12', () => {
-        if (mainWindow && mainWindow.webContents) {
-            if (mainWindow.webContents.isDevToolsOpened()) {
-                mainWindow.webContents.closeDevTools();
-            } else {
-                mainWindow.webContents.openDevTools();
-            }
-        }
-    });
-
-    // 注册 Ctrl+Shift+I 快捷键打开开发者工具
-    globalShortcut.register('CommandOrControl+Shift+I', () => {
-        if (mainWindow && mainWindow.webContents) {
-            if (mainWindow.webContents.isDevToolsOpened()) {
-                mainWindow.webContents.closeDevTools();
-            } else {
-                mainWindow.webContents.openDevTools();
-            }
-        }
-    });
-    
-    console.log('[Main] Global shortcuts registered: F12, Ctrl+Shift+I');
     
     // 注册 ComfyUI IPC handlers
     try {
