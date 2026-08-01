@@ -1131,3 +1131,73 @@ body.light-theme .floating-toast-notification {
     opacity: 1;
     color: var(--highlight-text);
 }
+
+/* === Agent 主动消息浮现形态（agent_active_message）=== */
+.notification-agent-active {
+    border-left: 3px solid var(--highlight-text, #5b8def);
+    background-color: var(--notification-bg, rgba(91, 141, 239, 0.08));
+}
+
+.notification-agent-active .agent-message-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.notification-agent-active .agent-message-avatar {
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--highlight-text, #5b8def);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 0.95em;
+}
+
+.notification-agent-active .agent-message-name {
+    color: var(--highlight-text, #5b8def);
+    font-size: 0.95em;
+}
+
+.notification-agent-active .agent-message-time {
+    margin-left: auto;
+    color: var(--secondary-text);
+    font-size: 0.75em;
+}
+
+.notification-agent-active .agent-message-body p {
+    margin: 0;
+    line-height: 1.5;
+}
+
+.notification-agent-active .agent-message-close {
+    margin-top: 8px;
+    align-self: flex-end;
+}
+
+.agent-message-unread {
+    position: relative;
+    cursor: pointer;
+}
+
+.agent-message-unread-dot {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ff5b5b;
+    box-shadow: 0 0 4px rgba(255, 91, 91, 0.7);
+    animation: agent-message-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes agent-message-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.35); opacity: 0.65; }
+}

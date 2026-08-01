@@ -35,6 +35,99 @@ function updateVCPLogStatus(statusUpdate, vcpLogConnectionStatusDiv) {
 
 const handledToolApprovalRequestIds = new Set();
 
+/**
+ * 渲染 Agent 主动消息（type: 'agent_active_message'）——"她主动来找你"的浮现形态。
+ * 与普通 VCP 日志通知区分：署名(recipient)+原始正文(originalContent)，持久 toast 不自动消失
+ * （需手动点掉，像真的被人找了一样），侧栏项带未读红点（点击移除红点）。
+ * toast 标记为 protected=agent-active，避开 focus/定期清理器强制移除。
+ */
+function renderAgentActiveMessage(logData, originalRawMessage = null, notificationsListUl) {
+    const data = (logData && typeof logData === 'object' && logData.data && typeof logData.data === 'object') ? logData.data : {};
+    const maid = data.recipient || data.maidName || (data.original_plugin_output && data.original_plugin_output.maidName) || null;
+    const body = data.originalContent || data.message || (typeof logData.message === 'string' ? logData.message : '') || '(无内容)';
+    const ts = data.timestamp || (typeof logData.message === 'string' ? '' : '');
+
+    const toastContainer = document.getElementById('floating-toast-notifications-container');
+
+    const buildElement = (element, isToast) => {
+        element.dataset.protectedNotification = 'agent-active';
+        element.classList.add('notification-item', 'notification-agent-active');
+
+        const header = document.createElement('div');
+        header.classList.add('agent-message-header');
+        const avatar = document.createElement('span');
+        avatar.classList.add('agent-message-avatar');
+        avatar.textContent = maid ? maid.charAt(0).toUpperCase() : '✉';
+        const nameEl = document.createElement('strong');
+        nameEl.classList.add('agent-message-name');
+        nameEl.textContent = maid || '助手';
+        const timeEl = document.createElement('span');
+        timeEl.classList.add('agent-message-time');
+        try {
+            timeEl.textContent = ts ? new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
+        } catch (_) { timeEl.textContent = ''; }
+        header.appendChild(avatar);
+        header.appendChild(nameEl);
+        header.appendChild(timeEl);
+        element.appendChild(header);
+
+        const contentDiv = document.createElement('div');
+        contentDiv.classList.add('notification-content', 'agent-message-body');
+        const p = document.createElement('p');
+        p.textContent = String(body).substring(0, 600) + (String(body).length > 600 ? '...' : '');
+        p.style.overflowWrap = 'break-word';
+        p.style.whiteSpace = 'pre-wrap';
+        contentDiv.appendChild(p);
+        element.appendChild(contentDiv);
+
+        if (isToast) {
+            const closeBtn = document.createElement('button');
+            closeBtn.classList.add('vcp-btn', 'agent-message-close');
+            closeBtn.textContent = '我知道了';
+            closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                element.classList.add('exiting');
+                const fallback = setTimeout(() => {
+                    if (element.parentNode) element.parentNode.removeChild(element);
+                }, 500);
+                element.addEventListener('transitionend', () => {
+                    clearTimeout(fallback);
+                    if (element.parentNode) element.parentNode.removeChild(element);
+                }, { once: true });
+            };
+            element.appendChild(closeBtn);
+        }
+        return element;
+    };
+
+    // 持久 toast（不自动消失，仅手动关闭）
+    if (toastContainer) {
+        const toastBubble = document.createElement('div');
+        toastBubble.classList.add('floating-toast-notification');
+        toastBubble.dataset.createdAt = Date.now().toString();
+        buildElement(toastBubble, true);
+        toastContainer.prepend(toastBubble);
+        setTimeout(() => toastBubble.classList.add('visible'), 50);
+    }
+
+    // 侧栏持久项 + 未读红点（点击移除红点）
+    if (notificationsListUl) {
+        const listItem = document.createElement('li');
+        listItem.classList.add('notification-item', 'notification-agent-active', 'agent-message-unread');
+        const unreadDot = document.createElement('span');
+        unreadDot.classList.add('agent-message-unread-dot');
+        listItem.appendChild(unreadDot);
+        buildElement(listItem, false);
+        listItem.addEventListener('click', () => {
+            listItem.classList.remove('agent-message-unread');
+            const dot = listItem.querySelector('.agent-message-unread-dot');
+            if (dot) dot.remove();
+        });
+        notificationsListUl.prepend(listItem);
+        setTimeout(() => listItem.classList.add('visible'), 50);
+    }
+}
+
 function sendToolApprovalResponse(requestId, approved, reason = '') {
     if (!requestId || !notificationRendererApi || typeof notificationRendererApi.sendVCPLogMessage !== 'function') {
         return false;
@@ -65,6 +158,11 @@ function sendToolApprovalResponse(requestId, approved, reason = '') {
  * @param {Object} themeColors - An object containing theme colors (largely unused now with CSS variables).
  */
 function renderVCPLogNotification(logData, originalRawMessage = null, notificationsListUl, themeColors = {}) {
+    // Agent 主动消息：走专用浮现形态（署名持久 toast + 未读红点），不进通用解析管线
+    if (logData && typeof logData === 'object' && logData.type === 'agent_active_message') {
+        renderAgentActiveMessage(logData, originalRawMessage, notificationsListUl);
+        return;
+    }
     if (logData && typeof logData === 'object' && logData.type === 'tool_approval_request' && logData.data && typeof logData.data === 'object') {
         const autoApprovalResult = window.filterManager?.checkToolAutoApproval?.(logData.data);
         if (autoApprovalResult && autoApprovalResult.action === 'approve') {
@@ -529,7 +627,7 @@ function initializeFocusCleanup() {
             // 清理超时的通知元素（显示超过10秒的）
             const allToasts = toastContainer.querySelectorAll('.floating-toast-notification');
             allToasts.forEach(toast => {
-                if (toast.dataset.protectedNotification === 'tool-approval') return;
+                if (toast.dataset.protectedNotification) return;
 
                 // 检查元素创建时间，如果没有时间戳则设置一个
                 if (!toast.dataset.createdAt) {
@@ -554,7 +652,7 @@ function initializeFocusCleanup() {
         if (toastContainer) {
             const allToasts = toastContainer.querySelectorAll('.floating-toast-notification');
             allToasts.forEach(toast => {
-                if (toast.dataset.protectedNotification === 'tool-approval') return;
+                if (toast.dataset.protectedNotification) return;
 
                 if (toast.dataset.createdAt) {
                     const createdAt = parseInt(toast.dataset.createdAt);
@@ -575,6 +673,7 @@ function initializeFocusCleanup() {
 window.notificationRenderer = {
     updateVCPLogStatus,
     renderVCPLogNotification,
+    renderAgentActiveMessage,
     initializeFocusCleanup
 };
 
