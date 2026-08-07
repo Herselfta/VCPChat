@@ -161,6 +161,13 @@ let isAudioEngineStopping = false;
 let appQuitCleanupPromise = null;
 let isFinalizingQuit = false;
 
+function toggleDevToolsForWindow(focusedWindow) {
+    if (!focusedWindow || focusedWindow.isDestroyed()) return;
+    if (loomManager?.toggleDevToolsForWindow(focusedWindow)) return;
+    const contents = focusedWindow.webContents;
+    if (contents && !contents.isDestroyed()) contents.toggleDevTools();
+}
+
 // --- Audio Engine Management ---
 // Now uses the Rust native audio engine instead of Python
 function startAudioEngine() {
@@ -882,10 +889,8 @@ if (!gotTheLock) {
                     {
                         label: '切换开发者工具',
                         accelerator: 'Ctrl+Shift+I',
-                        click: (item, focusedWindow) => {
-                            if (focusedWindow) {
-                                focusedWindow.webContents.toggleDevTools();
-                            }
+                        click: (_item, focusedWindow) => {
+                            toggleDevToolsForWindow(focusedWindow);
                         }
                     }
                 ]
@@ -1128,7 +1133,8 @@ if (!gotTheLock) {
                         handleCanvasControl: desktopRemoteHandlers.handleCanvasControl, // Inject the canvas control handler
                         handleFlowlockControl: desktopRemoteHandlers.handleFlowlockControl, // Inject the flowlock control handler
                         handleDesktopRemoteControl: desktopRemoteHandlers.handleDesktopRemoteControl, // Inject the desktop remote control handler
-                        chatDataService // Share the Electron-owned VCP-CDS facade with direct plugins.
+                        chatDataService, // Share the Electron-owned VCP-CDS facade with direct plugins.
+                        loomManager // Share the Electron-owned VCP Loom manager with direct plugins.
                     };
                     distributedServer = new DistributedServer(config);
                     await distributedServer.initialize();

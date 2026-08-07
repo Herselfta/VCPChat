@@ -11,20 +11,46 @@ const {
 } = require('electron');
 const path = require('path');
 const fs = require('fs-extra');
+const webAgentCore = require('./webcore');
+const {
+    createElectronWebAgentAdapter,
+} = require('./webcore/electron-adapter');
 
 const MANIFEST_FILE = 'loom.json';
 const INJECT_CSS_FILE = 'inject.css';
 const INJECT_JS_FILE = 'inject.js';
+const DEVICE_PERMISSIONS_FILE = 'device-permissions.json';
 const PACKAGE_FORMAT = 'vcp-loom-package';
 const PACKAGE_VERSION = 1;
 const TITLE_BAR_HEIGHT = 44;
 const SAFE_APP_ID = /^[a-z0-9][a-z0-9_-]{1,63}$/;
 const MAX_INJECT_BYTES = 2 * 1024 * 1024;
 const MAX_SHARE_TEXT = 100000;
+const MAX_RUNTIME_SOURCE = 4 * 1024 * 1024;
+const MAX_RENDERED_TEXT = 500000;
+const WEB_AGENT_WORLD_ID = 999;
+const LOOM_PAGE_ACTIONS = Object.freeze(new Set([
+    'page_get_info',
+    'page_query_html',
+    'page_query_scripts',
+    'page_code_search',
+    'page_wait_for',
+    'page_click',
+    'page_type',
+    'page_set_value',
+    'page_send_keys',
+    'page_select_option',
+    'page_check',
+    'page_hover',
+    'page_scroll',
+]));
+const LOOM_ACTIONS = Object.freeze(new Set(
+    webAgentCore.getCapabilityCatalog().map((definition) => definition.command)
+));
 
 const USER_AGENTS = Object.freeze({
     desktop: '',
-    mobile: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+    mobile: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Mobile Safari/537.36',
     iphone: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
 });
 
@@ -201,7 +227,11 @@ class VCPLoomManager {
         this.appsRoot = path.join(this.appDataRoot, 'LoomApps');
         this.managerUiPath = path.join(this.projectRoot, 'Loommodules', 'manager.html');
         this.shellUiPath = path.join(this.projectRoot, 'Loommodules', 'shell.html');
+        this.deviceMenuUiPath = path.join(this.projectRoot, 'Loommodules', 'device-menu.html');
         this.preloadPath = path.join(this.projectRoot, 'preloads', 'loom.js');
+        this.pagePreloadPath = path.join(this.projectRoot, 'preloads', 'loom-page.js');
+        this.webCoreRoot = path.join(__dirname, 'webcore');
+        this.webAgentSourceCache = null;
         this.mainWindow = options.mainWindow || null;
         this.openChildWindows = options.openChildWindows || [];
         this.managerWindow = null;
@@ -210,16 +240,28 @@ class VCPLoomManager {
         this.requestConfiguredPartitions = new Set();
         this.ipcRegistered = false;
         this.initialized = false;
+        this.initializationPromise = null;
     }
 
     async initialize() {
         if (this.initialized) return this;
-        await fs.ensureDir(this.appsRoot);
-        await this.reloadRegistry();
-        this.registerIpc();
-        this.initialized = true;
-        console.log(`[VCPLoomManager] Initialized with ${this.manifests.size} app(s).`);
-        return this;
+        if (this.initializationPromise) return this.initializationPromise;
+
+        this.initializationPromise = (async () => {
+            await fs.ensureDir(this.appsRoot);
+            await this.reloadRegistry();
+            this.registerIpc();
+            this.initialized = true;
+            console.log(`[VCPLoomManager] Initialized with ${this.manifests.size} app(s).`);
+            return this;
+        })();
+
+        try {
+            return await this.initializationPromise;
+        } catch (error) {
+            this.initializationPromise = null;
+            throw error;
+        }
     }
 
     assertAppId(appId) {
@@ -317,6 +359,372 @@ class VCPLoomManager {
         };
     }
 
+    listOpenApps() {
+        return Array.from(this.instances.values())
+            .filter((instance) => !instance.window.isDestroyed() && !instance.view.webContents.isDestroyed())
+            .map((instance) => ({
+                ...this.buildRuntimeState(instance),
+                manifest: clone(instance.manifest),
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    }
+
+    getRunningInstance(appId) {
+        const id = this.assertAppId(appId);
+        const instance = this.instances.get(id);
+        if (
+            !instance
+            || instance.window.isDestroyed()
+            || instance.view.webContents.isDestroyed()
+        ) {
+            throw new Error(`LoomAPP "${id}" 当前未打开。`);
+        }
+        return instance;
+    }
+
+    buildRuntimeState(instance) {
+        const contents = instance.view.webContents;
+        const successfulRender = instance.lastSuccessfulRender;
+        return {
+            appId: instance.appId,
+            name: instance.manifest.name,
+            running: true,
+            url: contents.isDestroyed() ? '' : contents.getURL(),
+            loading: instance.loading,
+            error: instance.lastError,
+            pageTitle: successfulRender?.title || '',
+            lastSuccessfulRenderAt: successfulRender?.capturedAt || null,
+        };
+    }
+
+    truncateRuntimeContent(value, maxBytes) {
+        const text = String(value ?? '');
+        const byteLength = Buffer.byteLength(text, 'utf8');
+        if (byteLength <= maxBytes) {
+            return { content: text, byteLength, truncated: false };
+        }
+
+        let low = 0;
+        let high = text.length;
+        while (low < high) {
+            const middle = Math.ceil((low + high) / 2);
+            if (Buffer.byteLength(text.slice(0, middle), 'utf8') <= maxBytes) {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        return {
+            content: text.slice(0, low),
+            byteLength,
+            truncated: true,
+        };
+    }
+
+    async captureRenderedSnapshot(instance) {
+        const contents = instance.view.webContents;
+        if (contents.isDestroyed()) throw new Error('LoomAPP 页面进程不可用。');
+
+        const snapshot = await contents.executeJavaScript(`(() => ({
+            title: document.title || '',
+            url: location.href,
+            text: (document.body && document.body.innerText ? document.body.innerText : '').trim()
+        }))()`, true);
+        const limited = this.truncateRuntimeContent(snapshot.text, MAX_RENDERED_TEXT);
+        instance.lastSuccessfulRender = {
+            title: String(snapshot.title || ''),
+            url: String(snapshot.url || contents.getURL()),
+            text: limited.content,
+            originalByteLength: limited.byteLength,
+            truncated: limited.truncated,
+            capturedAt: new Date().toISOString(),
+        };
+        return clone(instance.lastSuccessfulRender);
+    }
+
+    async readRuntimeSource(appId) {
+        const instance = this.getRunningInstance(appId);
+        const contents = instance.view.webContents;
+        const result = await contents.executeJavaScript(`(() => ({
+            title: document.title || '',
+            url: location.href,
+            html: document.documentElement ? document.documentElement.outerHTML : ''
+        }))()`, true);
+        const limited = this.truncateRuntimeContent(result.html, MAX_RUNTIME_SOURCE);
+        return {
+            appId: instance.appId,
+            title: String(result.title || ''),
+            url: String(result.url || contents.getURL()),
+            source: limited.content,
+            originalByteLength: limited.byteLength,
+            truncated: limited.truncated,
+            capturedAt: new Date().toISOString(),
+        };
+    }
+
+    async readRenderedText(appId, options = {}) {
+        const instance = this.getRunningInstance(appId);
+        const refresh = options.refresh !== false;
+        if (refresh || !instance.lastSuccessfulRender) {
+            await this.captureRenderedSnapshot(instance);
+        }
+        if (!instance.lastSuccessfulRender) {
+            throw new Error(`LoomAPP "${instance.appId}" 尚无成功渲染的文本快照。`);
+        }
+        return {
+            appId: instance.appId,
+            ...clone(instance.lastSuccessfulRender),
+        };
+    }
+
+    async getWebAgentSources() {
+        if (this.webAgentSourceCache) return this.webAgentSourceCache;
+        const files = [
+            'web-agent-protocol.js',
+            'web-agent-page-core.js',
+            'web-agent-page-runtime-core.js',
+        ];
+        this.webAgentSourceCache = await Promise.all(files.map(async (fileName) => ({
+            code: await fs.readFile(path.join(this.webCoreRoot, fileName), 'utf8'),
+            url: `vcp-loom-webcore://${fileName}`,
+        })));
+        return this.webAgentSourceCache;
+    }
+
+    async waitForDocumentReady(instance, generation) {
+        const contents = instance?.view?.webContents;
+        if (!contents || contents.isDestroyed()) {
+            throw new Error('LoomAPP 页面进程不可用。');
+        }
+        if (!contents.isLoadingMainFrame?.() && !instance.loading) return;
+
+        await Promise.race([
+            instance.documentReadyPromise,
+            new Promise((_, reject) => setTimeout(
+                () => reject(new Error('等待 LoomAPP 文档加载完成超时。')),
+                30000
+            )),
+        ]);
+        if (generation !== instance.documentGeneration) {
+            const error = new Error('页面已导航，放弃旧文档的 Web Agent 初始化。');
+            error.code = 'LOOM_DOCUMENT_CHANGED';
+            throw error;
+        }
+    }
+
+    async initializeWebAgentRuntime(instance, generation = instance.documentGeneration) {
+        const contents = instance?.view?.webContents;
+        if (!contents || contents.isDestroyed()) {
+            throw new Error('LoomAPP 页面进程不可用。');
+        }
+
+        await this.waitForDocumentReady(instance, generation);
+        const sources = await this.getWebAgentSources();
+        if (generation !== instance.documentGeneration) {
+            const error = new Error('页面已导航，放弃旧文档的 Web Agent 初始化。');
+            error.code = 'LOOM_DOCUMENT_CHANGED';
+            throw error;
+        }
+
+        await contents.executeJavaScriptInIsolatedWorld(WEB_AGENT_WORLD_ID, [
+            ...sources,
+            {
+                code: `(() => {
+                    const core = globalThis.VCPWebAgentPageRuntimeCore;
+                    if (!core || typeof core.createWebAgentPageRuntime !== 'function') {
+                        throw new Error('VCP Web Agent Page Runtime Core 加载失败');
+                    }
+                    globalThis.__vcpLoomWebAgentRuntime = core.createWebAgentPageRuntime(
+                        { window, document, Node },
+                        {
+                            runtimeInstanceId: ${JSON.stringify(`loom-${instance.appId}-${generation}-${Date.now()}`)},
+                            redactSensitiveDom: true
+                        }
+                    );
+                    return globalThis.__vcpLoomWebAgentRuntime.getIdentity();
+                })()`,
+                url: 'vcp-loom-webcore://bootstrap.js',
+            },
+        ], true);
+        if (generation !== instance.documentGeneration) {
+            const error = new Error('页面已导航，Web Agent 初始化结果已过期。');
+            error.code = 'LOOM_DOCUMENT_CHANGED';
+            throw error;
+        }
+
+        const identity = await contents.executeJavaScriptInIsolatedWorld(
+            WEB_AGENT_WORLD_ID,
+            [{
+                code: 'globalThis.__vcpLoomWebAgentRuntime.getIdentity()',
+                url: 'vcp-loom-webcore://identity.js',
+            }],
+            true
+        );
+        if (generation !== instance.documentGeneration) {
+            const error = new Error('页面已导航，Web Agent 身份信息已过期。');
+            error.code = 'LOOM_DOCUMENT_CHANGED';
+            throw error;
+        }
+        instance.webAgentReady = true;
+        instance.webAgentAdapter?.updateDocumentState(identity);
+    }
+
+    async ensureWebAgentRuntime(instance) {
+        if (instance.webAgentReady) return instance;
+        if (instance.webAgentInitializationPromise) {
+            await instance.webAgentInitializationPromise;
+            return instance;
+        }
+
+        const generation = instance.documentGeneration;
+        const initialization = this.initializeWebAgentRuntime(instance, generation);
+        instance.webAgentInitializationPromise = initialization;
+        try {
+            await initialization;
+        } finally {
+            if (instance.webAgentInitializationPromise === initialization) {
+                instance.webAgentInitializationPromise = null;
+            }
+        }
+        return instance;
+    }
+
+    async getWebAgentPageInfo(appId) {
+        const instance = await this.ensureWebAgentRuntime(this.getRunningInstance(appId));
+        const result = await instance.view.webContents.executeJavaScriptInIsolatedWorld(
+            WEB_AGENT_WORLD_ID,
+            [{
+                code: `(() => {
+                    const runtime = globalThis.__vcpLoomWebAgentRuntime;
+                    if (!runtime) throw new Error('Loom Web Agent Runtime 尚未初始化');
+                    return runtime.snapshot();
+                })()`,
+                url: 'vcp-loom-webcore://snapshot.js',
+            }],
+            true
+        );
+        return {
+            appId: instance.appId,
+            actionCatalog: webAgentCore.getCapabilityCatalog(),
+            ...result,
+        };
+    }
+
+    normalizeLoomActionId(actionId) {
+        const input = String(actionId || '').trim();
+        const resolved = webAgentCore.protocol.resolveCommand(input);
+        if (!resolved.definition || !LOOM_ACTIONS.has(resolved.canonical)) {
+            throw new Error(`不支持的 Loom Web Agent 动作：${input || '(empty)'}`);
+        }
+        return resolved.canonical;
+    }
+
+    async executeIsolatedPageOperation(instance, action, params = {}, request = {}) {
+        await this.ensureWebAgentRuntime(instance);
+        const serializedAction = JSON.stringify(action);
+        const serializedParams = JSON.stringify(params);
+        const serializedOptions = JSON.stringify({
+            ...(request.options || {}),
+            targetContext: request.targetContext || {},
+        });
+        return instance.view.webContents.executeJavaScriptInIsolatedWorld(
+            WEB_AGENT_WORLD_ID,
+            [{
+                code: `(async () => {
+                    const runtime = globalThis.__vcpLoomWebAgentRuntime;
+                    if (!runtime) throw new Error('Loom Web Agent Runtime 尚未初始化');
+                    return runtime.execute(
+                        ${serializedAction},
+                        ${serializedParams},
+                        ${serializedOptions}
+                    );
+                })()`,
+                url: `vcp-loom-webcore://action/${encodeURIComponent(action)}.js`,
+            }],
+            true
+        );
+    }
+
+    async executeWebAgentAction(appId, actionId, params = {}, options = {}) {
+        const instance = this.getRunningInstance(appId);
+        const action = this.normalizeLoomActionId(actionId);
+        if (!isPlainObject(params)) throw new Error('Loom Web Agent 动作 params 必须是对象。');
+        if (!isPlainObject(options)) throw new Error('Loom Web Agent 动作 options 必须是对象。');
+
+        if (!instance.webAgentRuntime) {
+            throw new Error('Loom Web Agent 后端运行时尚未初始化。');
+        }
+        const response = await instance.webAgentRuntime.execute({
+            command: action,
+            targetContext: {
+                adapter: 'electron-loom',
+                targetId: instance.view.webContents.id,
+                appId: instance.appId,
+                ...(isPlainObject(params.targetContext) ? params.targetContext : {}),
+            },
+            params,
+            options,
+            metadata: {
+                source: 'LoomController',
+                loomAppId: instance.appId,
+            },
+        });
+
+        if (response?.status === webAgentCore.protocol.Status.ERROR) {
+            const error = new Error(response.error || response.message || `Loom 动作 ${action} 执行失败。`);
+            error.code = response.code || 'LOOM_ACTION_FAILED';
+            error.details = response.details || null;
+            throw error;
+        }
+
+        return {
+            appId: instance.appId,
+            actionId: action,
+            definition: webAgentCore.protocol.resolveCommand(action).definition,
+            executedAt: new Date().toISOString(),
+            response,
+        };
+    }
+
+    async editAppSources(appId, payload = {}) {
+        const id = this.assertAppId(appId);
+        const current = await this.readSources(id);
+        const suppliedManifest = isPlainObject(payload.manifest)
+            ? payload.manifest
+            : {};
+        const manifest = {
+            ...current.manifest,
+            ...suppliedManifest,
+            id,
+            window: {
+                ...current.manifest.window,
+                ...(isPlainObject(suppliedManifest.window) ? suppliedManifest.window : {}),
+            },
+            viewport: {
+                ...current.manifest.viewport,
+                ...(isPlainObject(suppliedManifest.viewport) ? suppliedManifest.viewport : {}),
+            },
+            request: {
+                ...current.manifest.request,
+                ...(isPlainObject(suppliedManifest.request) ? suppliedManifest.request : {}),
+            },
+            navigation: {
+                ...current.manifest.navigation,
+                ...(isPlainObject(suppliedManifest.navigation) ? suppliedManifest.navigation : {}),
+            },
+            injection: {
+                ...current.manifest.injection,
+                ...(isPlainObject(suppliedManifest.injection) ? suppliedManifest.injection : {}),
+            },
+        };
+        return this.saveApp({
+            originalId: id,
+            manifest,
+            css: payload.css === undefined ? current.css : payload.css,
+            js: payload.js === undefined ? current.js : payload.js,
+        });
+    }
+
     async saveApp(payload = {}) {
         const previousId = payload.originalId ? this.assertAppId(payload.originalId) : null;
         const manifest = normalizeManifest(payload.manifest || payload, previousId || null);
@@ -333,11 +741,24 @@ class VCPLoomManager {
 
         this.manifests.set(manifest.id, manifest);
         const instance = this.instances.get(manifest.id);
-        if (instance) {
+        if (instance && !instance.window.isDestroyed()) {
             instance.manifest = manifest;
             instance.window.setTitle(`VCP Loom · ${manifest.name}`);
+            instance.window.setResizable(manifest.window.resizable);
+            instance.window.setMinimumSize(manifest.window.minWidth, manifest.window.minHeight);
+            instance.window.setMaximumSize(
+                manifest.window.maxWidth || 100000,
+                manifest.window.maxHeight || 100000
+            );
+            this.updateViewBounds(instance);
+            this.configureRequestProfile(instance);
             this.sendToShell(instance, 'loom:shell-state', this.buildShellState(instance));
             await this.applyInjections(instance);
+            try {
+                await this.captureRenderedSnapshot(instance);
+            } catch (error) {
+                console.warn(`[VCPLoomManager] Failed to refresh rendered snapshot for ${instance.appId}: ${error.message}`);
+            }
         }
 
         this.broadcastRegistryChanged();
@@ -376,10 +797,512 @@ class VCPLoomManager {
         return USER_AGENTS[manifest.request.profile] || '';
     }
 
+    configureRequestProfile(instance) {
+        const contents = instance.view.webContents;
+        const userAgent = this.resolveUserAgent(instance.manifest);
+
+        if (userAgent && !contents.isDestroyed()) {
+            contents.setUserAgent(userAgent);
+        }
+    }
+
+    isAllowedHardwareOrigin(instance, rawOrigin) {
+        try {
+            const origin = new URL(String(rawOrigin || '')).origin;
+            const currentUrl = instance.view.webContents.getURL();
+            const allowed = new Set([new URL(instance.manifest.startUrl).origin]);
+            if (currentUrl) allowed.add(new URL(currentUrl).origin);
+            return allowed.has(origin);
+        } catch {
+            return false;
+        }
+    }
+
+    devicePermissionsPath(appId) {
+        return path.join(this.appDir(appId), DEVICE_PERMISSIONS_FILE);
+    }
+
+    normalizeDeviceOrigin(value) {
+        try {
+            return new URL(String(value || '')).origin;
+        } catch {
+            return '';
+        }
+    }
+
+    deviceFingerprint(deviceType, device = {}) {
+        const type = String(deviceType || device.type || '').toLowerCase();
+        const vendorId = device.vendorId ?? device.usbVendorId;
+        const productId = device.productId ?? device.usbProductId;
+
+        // Chromium 的设备选择事件与刷新后的 device permission 回调不保证
+        // 提供相同的展示字段和 HID collections。这里只使用跨枚举稳定的硬件
+        // 标识；deviceId、名称和 collections 均不能参与持久授权匹配。
+        return JSON.stringify({
+            type,
+            vendorId: Number.isFinite(Number(vendorId)) ? Number(vendorId) : null,
+            productId: Number.isFinite(Number(productId)) ? Number(productId) : null,
+            serialNumber: String(device.serialNumber || ''),
+        });
+    }
+
+    normalizeStoredDeviceFingerprint(deviceType, fingerprint) {
+        try {
+            const identity = JSON.parse(String(fingerprint || ''));
+            return this.deviceFingerprint(deviceType, identity);
+        } catch {
+            return String(fingerprint || '');
+        }
+    }
+
+    async loadDevicePermissionGrants(appId) {
+        try {
+            const data = await fs.readJson(this.devicePermissionsPath(appId));
+            const grants = Array.isArray(data?.grants) ? data.grants : [];
+            return grants
+                .filter((grant) =>
+                    ['hid', 'usb', 'serial'].includes(grant?.deviceType)
+                    && typeof grant.origin === 'string'
+                    && typeof grant.fingerprint === 'string'
+                )
+                .map((grant) => ({
+                    deviceType: grant.deviceType,
+                    origin: this.normalizeDeviceOrigin(grant.origin),
+                    // 自动兼容旧版包含 name/collections 的指纹格式；下次写入时
+                    // 会自然迁移为稳定格式。
+                    fingerprint: this.normalizeStoredDeviceFingerprint(
+                        grant.deviceType,
+                        grant.fingerprint
+                    ),
+                    name: String(grant.name || ''),
+                    grantedAt: String(grant.grantedAt || ''),
+                }))
+                .filter((grant) => grant.origin);
+        } catch {
+            return [];
+        }
+    }
+
+    async saveDevicePermissionGrants(instance) {
+        await fs.writeJson(this.devicePermissionsPath(instance.appId), {
+            schemaVersion: 1,
+            grants: instance.devicePermissionGrants,
+        }, { spaces: 2 });
+    }
+
+    hasDevicePermission(instance, deviceType, origin, device) {
+        const normalizedOrigin = this.normalizeDeviceOrigin(origin);
+        const fingerprint = this.deviceFingerprint(deviceType, device);
+        return instance.devicePermissionGrants.some((grant) =>
+            grant.deviceType === deviceType
+            && grant.origin === normalizedOrigin
+            && grant.fingerprint === fingerprint
+        );
+    }
+
+    async grantDevicePermission(instance, deviceType, origin, device, name = '') {
+        const normalizedOrigin = this.normalizeDeviceOrigin(origin);
+        if (!normalizedOrigin) throw new Error('设备授权来源无效。');
+        const fingerprint = this.deviceFingerprint(deviceType, device);
+        const existing = instance.devicePermissionGrants.find((grant) =>
+            grant.deviceType === deviceType
+            && grant.origin === normalizedOrigin
+            && grant.fingerprint === fingerprint
+        );
+        if (existing) {
+            existing.name = String(name || existing.name || '');
+            existing.grantedAt = new Date().toISOString();
+        } else {
+            instance.devicePermissionGrants.push({
+                deviceType,
+                origin: normalizedOrigin,
+                fingerprint,
+                name: String(name || ''),
+                grantedAt: new Date().toISOString(),
+            });
+        }
+
+        // 选择回调返回给 Chromium 之前必须完成持久化。否则 requestDevice()
+        // 已成功但紧随其后的刷新可能早于授权文件落盘。
+        await this.saveDevicePermissionGrants(instance);
+    }
+
+    revokeDevicePermission(instance, deviceType, origin, device) {
+        const normalizedOrigin = this.normalizeDeviceOrigin(origin);
+        const fingerprint = this.deviceFingerprint(deviceType, device);
+        const before = instance.devicePermissionGrants.length;
+        instance.devicePermissionGrants = instance.devicePermissionGrants.filter((grant) =>
+            !(
+                grant.deviceType === deviceType
+                && grant.origin === normalizedOrigin
+                && grant.fingerprint === fingerprint
+            )
+        );
+        if (instance.devicePermissionGrants.length !== before) {
+            void this.saveDevicePermissionGrants(instance).catch((error) => {
+                console.warn(`[VCPLoomManager] Failed to persist revoked device permission for ${instance.appId}: ${error.message}`);
+            });
+        }
+    }
+
+    configureDevicePermissionBroker(instance) {
+        const contents = instance.view.webContents;
+        const persistentSession = contents.session;
+        const permissionTypes = new Set(['hid', 'usb', 'serial']);
+
+        persistentSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+            return permissionTypes.has(permission)
+                && this.isAllowedHardwareOrigin(instance, requestingOrigin);
+        });
+        persistentSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+            const origin = details?.requestingOrigin || details?.securityOrigin || contents.getURL();
+            callback(
+                permissionTypes.has(permission)
+                && this.isAllowedHardwareOrigin(instance, origin)
+            );
+        });
+        persistentSession.setDevicePermissionHandler((details) => {
+            const deviceType = String(details?.deviceType || '');
+            return permissionTypes.has(deviceType)
+                && this.isAllowedHardwareOrigin(instance, details?.origin)
+                && this.hasDevicePermission(
+                    instance,
+                    deviceType,
+                    details?.origin,
+                    details?.device || {}
+                );
+        });
+
+        const protocols = [
+            {
+                id: 'hid',
+                selectEvent: 'select-hid-device',
+                addedEvent: 'hid-device-added',
+                removedEvent: 'hid-device-removed',
+                initial: (args) => args[0]?.deviceList,
+                callback: (args) => args[1],
+                idOf: (device) => device?.deviceId,
+                nameOf: (device) => device?.productName,
+                requestOrigin: (args) =>
+                    args[0]?.frameOrigin || args[0]?.origin || contents.getURL(),
+                revokedEvent: 'hid-device-revoked',
+                revokedDevice: (details) => details?.device,
+                revokedOrigin: (details) => details?.origin,
+            },
+            {
+                id: 'usb',
+                selectEvent: 'select-usb-device',
+                addedEvent: 'usb-device-added',
+                removedEvent: 'usb-device-removed',
+                initial: (args) => args[0]?.deviceList,
+                callback: (args) => args[1],
+                idOf: (device) => device?.deviceId,
+                nameOf: (device) => device?.productName,
+                requestOrigin: (args) =>
+                    args[0]?.frameOrigin || args[0]?.origin || contents.getURL(),
+                revokedEvent: 'usb-device-revoked',
+                revokedDevice: (details) => details?.device,
+                revokedOrigin: (details) => details?.origin,
+            },
+            {
+                id: 'serial',
+                selectEvent: 'select-serial-port',
+                addedEvent: 'serial-port-added',
+                removedEvent: 'serial-port-removed',
+                initial: (args) => args[0],
+                callback: (args) => args[2],
+                idOf: (device) => device?.portId,
+                nameOf: (device) => device?.displayName,
+                requestOrigin: () => contents.getURL(),
+                revokedEvent: 'serial-port-revoked',
+                revokedDevice: (details) => details?.port,
+                revokedOrigin: (details) => details?.origin,
+            },
+        ];
+
+        const cleanupCallbacks = [];
+        const publish = (protocol, devicesById) => {
+            const devices = Array.from(devicesById.values()).map((device, index) => {
+                const id = String(protocol.idOf(device) || '');
+                const name = protocol.nameOf(device) || `${protocol.id.toUpperCase()} 设备 ${index + 1}`;
+                const ids = [];
+                if (device.vendorId !== undefined) {
+                    ids.push(`VID ${Number(device.vendorId).toString(16).padStart(4, '0')}`);
+                }
+                if (device.productId !== undefined) {
+                    ids.push(`PID ${Number(device.productId).toString(16).padStart(4, '0')}`);
+                }
+                if (device.serialNumber) ids.push(`SN ${device.serialNumber}`);
+                return { id, name, detail: ids.join(' · ') };
+            });
+            this.sendToShell(instance, 'loom:device-candidates', {
+                protocol: protocol.id,
+                devices,
+            });
+        };
+
+        for (const protocol of protocols) {
+            const onSelect = (event, ...args) => {
+                event.preventDefault();
+                instance.pendingDeviceSelections.get(protocol.id)?.cancel();
+
+                const callback = protocol.callback(args);
+                if (typeof callback !== 'function') return;
+                const devicesById = new Map();
+                const add = (device) => {
+                    const id = String(protocol.idOf(device) || '');
+                    if (id) devicesById.set(id, device);
+                };
+                for (const device of Array.isArray(protocol.initial(args)) ? protocol.initial(args) : []) {
+                    add(device);
+                }
+
+                let settled = false;
+                const onAdded = (_event, device) => {
+                    add(device);
+                    publish(protocol, devicesById);
+                };
+                const onRemoved = (_event, device) => {
+                    devicesById.delete(String(protocol.idOf(device) || ''));
+                    publish(protocol, devicesById);
+                };
+                const finish = (deviceId = '') => {
+                    if (settled) return;
+                    settled = true;
+                    persistentSession.removeListener(protocol.addedEvent, onAdded);
+                    persistentSession.removeListener(protocol.removedEvent, onRemoved);
+                    if (instance.pendingDeviceSelections.get(protocol.id)?.finish === finish) {
+                        instance.pendingDeviceSelections.delete(protocol.id);
+                    }
+                    callback(String(deviceId || ''));
+                };
+
+                persistentSession.on(protocol.addedEvent, onAdded);
+                persistentSession.on(protocol.removedEvent, onRemoved);
+                instance.pendingDeviceSelections.set(protocol.id, {
+                    protocol,
+                    origin: this.normalizeDeviceOrigin(protocol.requestOrigin(args)),
+                    devicesById,
+                    finish,
+                    cancel: () => finish(''),
+                });
+                publish(protocol, devicesById);
+            };
+            const onRevoked = (_event, details) => {
+                const device = protocol.revokedDevice(details);
+                const origin = protocol.revokedOrigin(details) || contents.getURL();
+                if (device) {
+                    this.revokeDevicePermission(instance, protocol.id, origin, device);
+                }
+            };
+            persistentSession.on(protocol.selectEvent, onSelect);
+            persistentSession.on(protocol.revokedEvent, onRevoked);
+            cleanupCallbacks.push(() => {
+                instance.pendingDeviceSelections.get(protocol.id)?.cancel();
+                persistentSession.removeListener(protocol.selectEvent, onSelect);
+                persistentSession.removeListener(protocol.revokedEvent, onRevoked);
+            });
+        }
+
+        const onBluetooth = (event, devices, callback) => {
+            event.preventDefault();
+            let pending = instance.pendingDeviceSelections.get('bluetooth');
+            if (!pending) {
+                const devicesById = new Map();
+                const finish = (deviceId = '') => {
+                    if (instance.pendingDeviceSelections.get('bluetooth') === pending) {
+                        instance.pendingDeviceSelections.delete('bluetooth');
+                    }
+                    callback(String(deviceId || ''));
+                };
+                pending = {
+                    devicesById,
+                    finish,
+                    cancel: () => finish(''),
+                };
+                instance.pendingDeviceSelections.set('bluetooth', pending);
+            }
+            for (const device of Array.isArray(devices) ? devices : []) {
+                const id = String(device?.deviceId || '');
+                if (id) pending.devicesById.set(id, device);
+            }
+            this.sendToShell(instance, 'loom:device-candidates', {
+                protocol: 'bluetooth',
+                devices: Array.from(pending.devicesById.values()).map((device, index) => ({
+                    id: String(device.deviceId || ''),
+                    name: device.deviceName || `蓝牙设备 ${index + 1}`,
+                    detail: '',
+                })),
+            });
+        };
+        contents.on('select-bluetooth-device', onBluetooth);
+        cleanupCallbacks.push(() => {
+            instance.pendingDeviceSelections.get('bluetooth')?.cancel();
+            contents.removeListener('select-bluetooth-device', onBluetooth);
+        });
+
+        instance.devicePermissionCleanup = () => {
+            for (const cleanup of cleanupCallbacks.splice(0)) cleanup();
+            for (const pending of instance.pendingDeviceSelections.values()) pending.cancel();
+            instance.pendingDeviceSelections.clear();
+        };
+    }
+
+    requestDeviceFromShell(instance, protocolId) {
+        const protocol = String(protocolId || '').toLowerCase();
+        if (!instance.deviceRequestStates) instance.deviceRequestStates = new Map();
+        const requestState = {
+            id: `${protocol}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            committed: false,
+        };
+        instance.deviceRequestStates.set(protocol, requestState);
+
+        const scripts = {
+            hid: `(async () => {
+                if (!navigator.hid) throw new Error('当前页面不支持 WebHID');
+                const selected = Array.from(await navigator.hid.requestDevice({ filters: [] }));
+                return {
+                    confirmed: selected.length > 0,
+                    count: selected.length,
+                    name: selected.map((device) => device.productName || 'HID 设备').join('、')
+                };
+            })()`,
+            usb: `(async () => {
+                if (!navigator.usb) throw new Error('当前页面不支持 WebUSB');
+                const selected = await navigator.usb.requestDevice({ filters: [] });
+                return {
+                    confirmed: Boolean(selected),
+                    count: selected ? 1 : 0,
+                    name: selected?.productName || 'USB 设备'
+                };
+            })()`,
+            serial: `(async () => {
+                if (!navigator.serial) throw new Error('当前页面不支持 WebSerial');
+                const selected = await navigator.serial.requestPort({ filters: [] });
+                return {
+                    confirmed: Boolean(selected),
+                    count: selected ? 1 : 0,
+                    name: '串口设备'
+                };
+            })()`,
+            // WebBluetooth 没有 getDevices()，网站应直接消费 requestDevice()
+            // 返回值；不能通过一次盲目刷新来“确认”授权。
+            bluetooth: `(async () => {
+                if (!navigator.bluetooth) throw new Error('当前页面不支持 WebBluetooth');
+                const selected = await navigator.bluetooth.requestDevice({ acceptAllDevices: true });
+                return { confirmed: true, reload: false, count: 1, name: selected.name || '蓝牙设备' };
+            })()`,
+        };
+        if (!Object.prototype.hasOwnProperty.call(scripts, protocol)) {
+            throw new Error(`不支持的设备协议：${protocol}`);
+        }
+
+        const contents = instance.view.webContents;
+        if (contents.isDestroyed()) throw new Error('LoomAPP 页面进程不可用。');
+        const requestPromise = contents.executeJavaScript(scripts[protocol], true);
+        void requestPromise.then((result) => {
+            if (
+                instance.deviceRequestStates?.get(protocol) !== requestState
+                || requestState.committed
+            ) {
+                return;
+            }
+            if (!result?.confirmed) {
+                this.sendToShell(instance, 'loom:device-candidates', {
+                    protocol,
+                    devices: [],
+                    error: `设备已选择，但授权尚未稳定（当前可回读 ${Number(result?.count) || 0} 个设备）。页面未刷新，请重试。`,
+                });
+                return;
+            }
+
+            this.sendToShell(instance, 'loom:device-candidates', {
+                protocol,
+                devices: [],
+                connected: true,
+                count: Number(result.count) || 0,
+                name: result.name || `${protocol.toUpperCase()} 设备`,
+            });
+
+            // 不在这里刷新。许多厂商站点会在 requestDevice() 完成后自行
+            // 重建或刷新控制应用；再次 reload 会销毁新页面刚打开的 HID/USB/
+            // Serial 句柄，导致首条 sendReport()/transferOut() 通讯失败。
+        }).catch((error) => {
+            // 厂商常在选择完成后立即刷新同 URL 的控制应用。此时旧页面中的
+            // executeJavaScript 会因上下文销毁而拒绝，但主进程授权其实已经
+            // 持久化并提交，不能让旧异步结果覆盖“已授权”状态。
+            if (
+                instance.deviceRequestStates?.get(protocol) !== requestState
+                || requestState.committed
+            ) {
+                return;
+            }
+            this.sendToShell(instance, 'loom:device-candidates', {
+                protocol,
+                devices: [],
+                error: error?.message || String(error),
+            });
+        });
+        return { pending: true, protocol };
+    }
+
+    async selectDeviceFromShell(instance, payload = {}) {
+        const protocol = String(payload.protocol || '').toLowerCase();
+        const deviceId = String(payload.deviceId || '');
+        const pending = instance.pendingDeviceSelections.get(protocol);
+        if (!pending || !deviceId || !pending.devicesById.has(deviceId)) {
+            throw new Error('设备候选已失效，请重新扫描。');
+        }
+        const device = pending.devicesById.get(deviceId);
+        const name = pending.protocol?.nameOf?.(device)
+            || device?.deviceName
+            || `${protocol.toUpperCase()} 设备`;
+        if (pending.protocol && ['hid', 'usb', 'serial'].includes(protocol)) {
+            try {
+                await this.grantDevicePermission(
+                    instance,
+                    protocol,
+                    pending.origin || instance.view.webContents.getURL(),
+                    device,
+                    name
+                );
+            } catch (error) {
+                // 持久化失败时取消 Chromium 选择，避免产生“本次看似成功、
+                // 刷新或重启立即丢失”的半提交状态。
+                pending.finish('');
+                throw new Error(`设备授权持久化失败：${error.message}`);
+            }
+        }
+        const requestState = instance.deviceRequestStates?.get(protocol);
+        if (requestState) requestState.committed = true;
+
+        // 这里才是权威成功点：授权记录已落盘，且即将向 Chromium 提交选择。
+        // 提前通知菜单，避免厂商随即刷新页面导致旧 executeJavaScript 误报。
+        this.sendToShell(instance, 'loom:device-candidates', {
+            protocol,
+            devices: [],
+            connected: true,
+            count: 1,
+            name,
+        });
+        pending.finish(deviceId);
+        return { connected: true, protocol, deviceId, name };
+    }
+
     configureSession(manifest) {
         const partition = this.partitionName(manifest.id);
         const persistentSession = session.fromPartition(partition, { cache: true });
-        const configKey = `${partition}:${JSON.stringify(manifest.request.headers)}`;
+        const userAgent = this.resolveUserAgent(manifest);
+
+        // 由 Chromium 会话原生设置 User-Agent。不要通过 webRequest 强制伪造
+        // Sec-CH-UA-*；这些受保护头由 Chromium 根据实际网络栈生成，人为覆盖
+        // 可能令站点的 HTML、脚本和缓存命中不同客户端变体。
+        if (userAgent) {
+            persistentSession.setUserAgent(userAgent, 'zh-CN,zh;q=0.9,en;q=0.8');
+        }
+
+        const requestHeaders = { ...manifest.request.headers };
+        const configKey = `${partition}:request-profile-v3:${manifest.request.profile}:${JSON.stringify(requestHeaders)}`;
 
         if (!this.requestConfiguredPartitions.has(configKey)) {
             for (const key of this.requestConfiguredPartitions) {
@@ -389,7 +1312,7 @@ class VCPLoomManager {
                 callback({
                     requestHeaders: {
                         ...details.requestHeaders,
-                        ...manifest.request.headers,
+                        ...requestHeaders,
                     },
                 });
             });
@@ -435,6 +1358,10 @@ class VCPLoomManager {
         const view = new WebContentsView({
             webPreferences: {
                 session: persistentSession,
+                preload: this.pagePreloadPath,
+                additionalArguments: [
+                    `--loom-page-profile=${encodeURIComponent(manifest.request.profile)}`,
+                ],
                 contextIsolation: true,
                 nodeIntegration: false,
                 sandbox: true,
@@ -442,19 +1369,66 @@ class VCPLoomManager {
                 webSecurity: true,
             },
         });
+        const deviceMenuView = new WebContentsView({
+            webPreferences: {
+                preload: this.preloadPath,
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: true,
+                javascript: true,
+                webSecurity: true,
+            },
+        });
+        deviceMenuView.setBackgroundColor('#00000000');
 
+        const devicePermissionGrants = await this.loadDevicePermissionGrants(manifest.id);
+        let resolveDocumentReady;
         const instance = {
             appId: manifest.id,
             manifest,
             window: win,
             view,
+            deviceMenuView,
             cssKey: null,
             loading: true,
             lastError: null,
+            lastSuccessfulRender: null,
+            documentGeneration: 0,
+            documentReadyPromise: new Promise((resolve) => {
+                resolveDocumentReady = resolve;
+            }),
+            resolveDocumentReady,
+            webAgentReady: false,
+            webAgentInitializationPromise: null,
+            webAgentAdapter: null,
+            webAgentRuntime: null,
+            deviceMenuOpen: false,
+            devicePermissionGrants,
+            pendingDeviceSelections: new Map(),
+            deviceRequestStates: new Map(),
+            devicePermissionCleanup: null,
         };
+        this.configureDevicePermissionBroker(instance);
+        instance.webAgentAdapter = createElectronWebAgentAdapter(view.webContents, {
+            appId: manifest.id,
+            worldId: WEB_AGENT_WORLD_ID,
+            executePageOperation: (action, params, request) =>
+                this.executeIsolatedPageOperation(instance, action, params, request),
+        });
+        instance.webAgentRuntime = webAgentCore.createRuntime(instance.webAgentAdapter, {
+            audit: (entry) => {
+                if (entry.phase === 'error') {
+                    console.warn(`[VCPLoomManager] Web Agent ${instance.appId} ${entry.command || 'unknown'} failed.`);
+                }
+            },
+        });
 
         this.instances.set(manifest.id, instance);
         win.contentView.addChildView(view);
+        // 后加入的原生 View 位于网页 View 上方，菜单可真正覆盖网页。
+        win.contentView.addChildView(deviceMenuView);
+        deviceMenuView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+        await deviceMenuView.webContents.loadFile(this.deviceMenuUiPath);
         this.trackChildWindow(win);
         this.bindInstance(instance);
 
@@ -467,9 +1441,12 @@ class VCPLoomManager {
         const shellUrl = `file:///${this.shellUiPath.replace(/\\/g, '/')}?appId=${encodeURIComponent(manifest.id)}`;
         await win.loadURL(shellUrl);
 
+        // 首次导航前设置真实 WebContentsView 尺寸与请求配置。
+        // 不启用任何 Chromium 设备仿真层；部分 Electron + WebContentsView
+        // 组合会因此触发原生层崩溃。
+        this.updateViewBounds(instance);
+        this.configureRequestProfile(instance);
         const userAgent = this.resolveUserAgent(manifest);
-        if (userAgent) view.webContents.setUserAgent(userAgent);
-
         await view.webContents.loadURL(manifest.startUrl, userAgent ? { userAgent } : undefined);
         this.updateViewBounds(instance);
 
@@ -489,6 +1466,19 @@ class VCPLoomManager {
         win.on('maximize', syncBounds);
         win.on('unmaximize', syncBounds);
 
+        contents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+            if (!isMainFrame || isInPlace) return;
+            instance.documentGeneration += 1;
+            instance.loading = true;
+            instance.webAgentReady = false;
+            instance.webAgentInitializationPromise = null;
+            instance.documentReadyPromise = new Promise((resolve) => {
+                instance.resolveDocumentReady = resolve;
+            });
+            instance.webAgentAdapter?.invalidateDocument();
+            this.sendToShell(instance, 'loom:shell-state', this.buildShellState(instance));
+        });
+
         contents.on('did-start-loading', () => {
             instance.loading = true;
             this.sendToShell(instance, 'loom:shell-state', this.buildShellState(instance));
@@ -501,13 +1491,40 @@ class VCPLoomManager {
 
         contents.on('did-finish-load', async () => {
             instance.lastError = null;
-            await this.applyInjections(instance);
+            instance.loading = false;
+            instance.resolveDocumentReady?.();
+            const generation = instance.documentGeneration;
+
+            // 用户注入脚本、Agent 运行时和文本快照互不阻塞。尤其不能让一个
+            // 长时间运行的 inject.js 阻止 AI/CDP 侧获得页面能力。
+            const results = await Promise.allSettled([
+                this.applyInjections(instance),
+                this.ensureWebAgentRuntime(instance),
+                this.captureRenderedSnapshot(instance),
+            ]);
+            const agentResult = results[1];
+            if (
+                agentResult.status === 'rejected'
+                && generation === instance.documentGeneration
+                && agentResult.reason?.code !== 'LOOM_DOCUMENT_CHANGED'
+            ) {
+                instance.webAgentReady = false;
+                console.warn(`[VCPLoomManager] Failed to initialize Web Agent Runtime for ${instance.appId}: ${agentResult.reason.message}`);
+            }
+            const snapshotResult = results[2];
+            if (
+                snapshotResult.status === 'rejected'
+                && generation === instance.documentGeneration
+            ) {
+                console.warn(`[VCPLoomManager] Failed to capture rendered snapshot for ${instance.appId}: ${snapshotResult.reason.message}`);
+            }
             this.sendToShell(instance, 'loom:shell-state', this.buildShellState(instance));
         });
 
         contents.on('did-fail-load', (_event, code, description, validatedUrl, isMainFrame) => {
             if (!isMainFrame || code === -3) return;
             instance.loading = false;
+            instance.resolveDocumentReady?.();
             instance.lastError = `${description} (${code})`;
             this.sendToShell(instance, 'loom:shell-state', this.buildShellState(instance));
             console.warn(`[VCPLoomManager] ${instance.appId} failed to load ${validatedUrl}: ${instance.lastError}`);
@@ -544,12 +1561,41 @@ class VCPLoomManager {
         });
 
         contents.on('render-process-gone', (_event, details) => {
+            if (instance.closing) return;
             instance.lastError = `页面进程异常退出：${details.reason}`;
             this.sendToShell(instance, 'loom:shell-state', this.buildShellState(instance));
         });
 
+        win.once('close', () => {
+            instance.closing = true;
+            instance.devicePermissionCleanup?.();
+            instance.devicePermissionCleanup = null;
+            void instance.webAgentAdapter?.dispose().catch((error) => {
+                console.warn(`[VCPLoomManager] Failed to dispose Web Agent Adapter for ${instance.appId}: ${error.message}`);
+            });
+            const menuContents = instance.deviceMenuView?.webContents;
+            if (menuContents && !menuContents.isDestroyed()) {
+                try {
+                    win.contentView.removeChildView(instance.deviceMenuView);
+                } catch (error) {
+                    console.warn(`[VCPLoomManager] Failed to detach device menu for ${instance.appId}: ${error.message}`);
+                }
+                menuContents.close({ waitForBeforeUnload: false });
+            }
+            if (!contents.isDestroyed()) {
+                // WebContentsView 不会随 BrowserWindow 自动销毁。必须在父窗口的
+                // 原生对象释放前先脱离视图树并关闭，否则 closed 阶段操作它会触发
+                // “Object has been destroyed”。
+                try {
+                    win.contentView.removeChildView(view);
+                } catch (error) {
+                    console.warn(`[VCPLoomManager] Failed to detach view for ${instance.appId}: ${error.message}`);
+                }
+                contents.close({ waitForBeforeUnload: false });
+            }
+        });
+
         win.on('closed', () => {
-            if (!contents.isDestroyed()) contents.close();
             this.instances.delete(instance.appId);
             this.untrackChildWindow(win);
             this.broadcastRegistryChanged();
@@ -567,12 +1613,28 @@ class VCPLoomManager {
         const height = viewport.autoResize ? availableHeight : Math.min(viewport.height, availableHeight);
         const x = Math.max(0, Math.floor((availableWidth - width) / 2));
 
+        // 网页尺寸永远不因设备菜单开关而变化。
         instance.view.setBounds({
             x,
             y: TITLE_BAR_HEIGHT,
             width,
             height,
         });
+
+        const menuView = instance.deviceMenuView;
+        if (menuView?.webContents && !menuView.webContents.isDestroyed()) {
+            if (instance.deviceMenuOpen) {
+                const menuWidth = Math.max(280, Math.min(360, contentWidth - 16));
+                menuView.setBounds({
+                    x: Math.max(8, contentWidth - menuWidth - 8),
+                    y: TITLE_BAR_HEIGHT + 6,
+                    width: menuWidth,
+                    height: Math.min(212, availableHeight),
+                });
+            } else {
+                menuView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+            }
+        }
     }
 
     async applyInjections(instance) {
@@ -610,8 +1672,8 @@ class VCPLoomManager {
             name: instance.manifest.name,
             url: contents.isDestroyed() ? '' : contents.getURL(),
             loading: instance.loading,
-            canGoBack: !contents.isDestroyed() && contents.canGoBack(),
-            canGoForward: !contents.isDestroyed() && contents.canGoForward(),
+            canGoBack: !contents.isDestroyed() && contents.navigationHistory.canGoBack(),
+            canGoForward: !contents.isDestroyed() && contents.navigationHistory.canGoForward(),
             error: instance.lastError,
         };
     }
@@ -621,11 +1683,20 @@ class VCPLoomManager {
         if (shellContents && !shellContents.isDestroyed()) {
             shellContents.send(channel, payload);
         }
+        if (channel === 'loom:device-candidates') {
+            const menuContents = instance?.deviceMenuView?.webContents;
+            if (menuContents && !menuContents.isDestroyed()) {
+                menuContents.send(channel, payload);
+            }
+        }
     }
 
     getInstanceBySender(sender) {
         for (const instance of this.instances.values()) {
-            if (!instance.window.isDestroyed() && instance.window.webContents.id === sender.id) {
+            if (instance.window.isDestroyed()) continue;
+            if (instance.window.webContents.id === sender.id) return instance;
+            const menuContents = instance.deviceMenuView?.webContents;
+            if (menuContents && !menuContents.isDestroyed() && menuContents.id === sender.id) {
                 return instance;
             }
         }
@@ -635,10 +1706,37 @@ class VCPLoomManager {
     async navigate(instance, action) {
         const contents = instance.view.webContents;
         if (contents.isDestroyed()) return;
-        if (action === 'back' && contents.canGoBack()) contents.goBack();
-        if (action === 'forward' && contents.canGoForward()) contents.goForward();
+        if (action === 'back' && contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
+        if (action === 'forward' && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
         if (action === 'reload') contents.reload();
         if (action === 'home') await contents.loadURL(instance.manifest.startUrl);
+    }
+
+    normalizeNavigationUrl(value) {
+        const input = String(value || '').trim();
+        if (!input) throw new Error('请输入网址。');
+
+        const candidate = /^[a-z][a-z\d+.-]*:/i.test(input) ? input : `https://${input}`;
+        let url;
+        try {
+            url = new URL(candidate);
+        } catch {
+            throw new Error('网址格式无效。');
+        }
+        if (!['http:', 'https:'].includes(url.protocol)) {
+            throw new Error('仅允许访问 HTTP 或 HTTPS 网址。');
+        }
+        return url.toString();
+    }
+
+    async navigateToUrl(instance, value) {
+        const contents = instance.view.webContents;
+        if (contents.isDestroyed()) throw new Error('LoomAPP 页面进程不可用。');
+        const url = this.normalizeNavigationUrl(value);
+        instance.lastError = null;
+        const userAgent = this.resolveUserAgent(instance.manifest);
+        await contents.loadURL(url, userAgent ? { userAgent } : undefined);
+        return this.buildShellState(instance);
     }
 
     async shareVisibleText(instance) {
@@ -668,6 +1766,24 @@ class VCPLoomManager {
         return { success: true, length: payload.length };
     }
 
+    toggleDevToolsForWindow(win) {
+        if (!win || win.isDestroyed()) return false;
+        const instance = Array.from(this.instances.values()).find((candidate) =>
+            !candidate.window.isDestroyed() && candidate.window === win
+        );
+        if (!instance || instance.view.webContents.isDestroyed()) return false;
+
+        const contents = instance.view.webContents;
+        if (contents.isDevToolsOpened()) {
+            contents.closeDevTools();
+        } else {
+            // WebContentsView 是位于 BrowserWindow 壳之上的原生视图。若把壳的
+            // DevTools 停靠在窗口内，网页视图会覆盖控制台，因此始终独立打开。
+            contents.openDevTools({ mode: 'detach', activate: true });
+        }
+        return true;
+    }
+
     async closeApp(appId) {
         const id = this.assertAppId(appId);
         const instance = this.instances.get(id);
@@ -692,6 +1808,7 @@ class VCPLoomManager {
             persistentSession.clearAuthCache(),
         ]);
         await persistentSession.cookies.flushStore();
+        await fs.remove(this.devicePermissionsPath(id));
         return { success: true };
     }
 
@@ -878,9 +1995,16 @@ class VCPLoomManager {
         };
 
         handle('loom:list-apps', () => this.listApps());
+        handle('loom:list-open-apps', () => this.listOpenApps());
         handle('loom:get-app', (_event, appId) => this.readSources(appId));
+        handle('loom:get-runtime-source', (_event, appId) => this.readRuntimeSource(appId));
+        handle('loom:get-rendered-text', (_event, appId, options) => this.readRenderedText(appId, options));
+        handle('loom:get-web-agent-page-info', (_event, appId) => this.getWebAgentPageInfo(appId));
+        handle('loom:execute-web-agent-action', (_event, appId, actionId, params, options) =>
+            this.executeWebAgentAction(appId, actionId, params, options));
         handle('loom:create-app', (_event, payload) => this.createApp(payload));
         handle('loom:save-app', (_event, payload) => this.saveApp(payload));
+        handle('loom:edit-app-sources', (_event, appId, payload) => this.editAppSources(appId, payload));
         handle('loom:delete-app', (_event, appId) => this.deleteApp(appId));
         handle('loom:set-enabled', (_event, appId, enabled) => this.setEnabled(appId, enabled));
         handle('loom:open-app', (_event, appId) => this.openApp(appId));
@@ -901,13 +2025,26 @@ class VCPLoomManager {
             if (!instance) throw new Error('无法识别 Loom 壳窗口。');
             return this.buildShellState(instance);
         });
-        handle('loom:shell-action', async (event, action) => {
+        handle('loom:shell-action', async (event, action, payload) => {
             const instance = this.getInstanceBySender(event.sender);
             if (!instance) throw new Error('无法识别 Loom 壳窗口。');
             if (['back', 'forward', 'reload', 'home'].includes(action)) {
                 await this.navigate(instance, action);
+            } else if (action === 'navigate') {
+                return this.navigateToUrl(instance, payload);
             } else if (action === 'share-text') {
                 return this.shareVisibleText(instance);
+            } else if (action === 'device-menu') {
+                instance.deviceMenuOpen = payload === true;
+                this.updateViewBounds(instance);
+                return {
+                    appId: instance.appId,
+                    deviceMenuOpen: instance.deviceMenuOpen,
+                };
+            } else if (action === 'device-request') {
+                return this.requestDeviceFromShell(instance, payload);
+            } else if (action === 'device-select') {
+                return this.selectDeviceFromShell(instance, payload);
             } else if (action === 'open-external') {
                 await shell.openExternal(instance.view.webContents.getURL());
             } else {
@@ -938,4 +2075,6 @@ module.exports = {
     getManager,
     DEFAULT_MANIFEST,
     USER_AGENTS,
+    LOOM_PAGE_ACTIONS,
+    LOOM_ACTIONS,
 };

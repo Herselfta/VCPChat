@@ -8,7 +8,7 @@
                    script-src 'self' 'unsafe-inline';
                    style-src 'self' 'unsafe-inline' https:;
                    img-src * data: file: blob:;
-                   media-src * data: file:;
+                   media-src * data: file: blob:;
                    font-src *;
                    connect-src * ws: wss:;">
     <title>VCPChat</title>
@@ -210,7 +210,10 @@
                                     <path d="m20 20-3.5-3.5"></path>
                                 </svg>
                             </span>
-                            <input type="text" id="topicSearchInput" placeholder="搜索话题..." class="topic-search-input">
+                            <input type="text" id="topicSearchInput" placeholder="搜索话题或未读话题"
+                                title="输入“未读话题”或“unread topic”将未读话题置顶"
+                                aria-label="搜索话题或未读话题"
+                                class="topic-search-input">
                         </div>
                     </div>
                 </div>
@@ -2149,6 +2152,7 @@
     <script src="Flowlockmodules/flowlock.js"></script>
     <script src="Flowlockmodules/flowlock-integration.js"></script>
     <script type="module" src="renderer.js" defer></script>
+    <script src="VCPDistributedServer/frontend-plugin-loader.js" defer></script>
 
     <!-- User Emoticon Panel -->
     <div id="emoticonPanel" class="emoticon-panel"></div>

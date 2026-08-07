@@ -319,7 +319,7 @@ const MERMAID_CODE_REGEX = /<code.*?>\s*(flowchart|graph|mermaid)\s+([\s\S]*?)<\
 const MERMAID_FENCE_REGEX = /```(mermaid|flowchart|graph)[^\S\n]*\n([\s\S]*?)```/g;
 const CODE_FENCE_REGEX = /```[^\n]*([\s\S]*?)```/g;
 const THOUGHT_CHAIN_REGEX = /^[ \t]*\[--- VCP元思考链(?::\s*"([^"]*)")?\s*---\][ \t]*\r?\n([\s\S]*?)^[ \t]*\[--- 元思考链结束 ---\][ \t]*(?:\r?\n|$)/gm;
-const CONVENTIONAL_THOUGHT_REGEX = /^[ \t]*<think(?:ing)?>[ \t]*\r?\n([\s\S]*?)^[ \t]*<\/think(?:ing)?>[ \t]*(?:\r?\n|$)/gim;
+const CONVENTIONAL_THOUGHT_REGEX = /^[ \t]*<(think(?:ing)?)>[ \t]*(?:\r?\n)?([\s\S]*?)<\/\1>[ \t]*(?:\r?\n|$)/gim;
 const ROLE_DIVIDER_REGEX = /<<<\[(END_)?ROLE_DIVIDE_(SYSTEM|ASSISTANT|USER)\]>>>/g;
 const DESKTOP_PUSH_REGEX = /(?<!`)<<<\[DESKTOP_PUSH\]>>>([\s\S]*?)<<<\[DESKTOP_PUSH_END\]>>>(?!`)/gs;
 const DESKTOP_PUSH_PARTIAL_REGEX = /(?<!`)<<<\[DESKTOP_PUSH\]>>>([\s\S]*)$/s; // 流式传输中未闭合的情况
@@ -872,7 +872,7 @@ function applyFrontendRegexRules(text, rules, role, depth) {
  * @param {Map} [codeBlockMap] Map of code block placeholders to their original content.
  * @returns {string} The processed text with special blocks as HTML.
  */
-function transformSpecialBlocks(text, codeBlockMap) {
+function transformSpecialBlocks(text, codeBlockMap, thoughtChainMap = null) {
     let processed = text;
 
     const restoreBlocks = (textStr) => {
@@ -1241,52 +1241,8 @@ function transformSpecialBlocks(text, codeBlockMap) {
         return `\n\n${html}\n\n`;
     });
 
-    // Process VCP Thought Chains
-    const renderThoughtChain = (theme, rawContent) => {
-        const displayTheme = theme ? theme.trim() : "元思考链";
-        const content = rawContent.trim();
-        const escapedContent = escapeHtml(restoreBlocks(content));
-
-        let html = `<div class="vcp-thought-chain-bubble collapsible" data-vcp-block-type="thought-chain" data-vcp-preserve-children="true">`;
-        html += `<div class="vcp-thought-chain-header">`;
-        html += `<span class="vcp-thought-chain-icon">🧠</span>`;
-        html += `<span class="vcp-thought-chain-label">${escapeHtml(displayTheme)}</span>`;
-        html += `<span class="vcp-result-toggle-icon"></span>`;
-        html += `</div>`;
-
-        html += `<div class="vcp-thought-chain-collapsible-content">`;
-
-        let processedContent;
-        if (mainRendererReferences.markedInstance) {
-            try {
-                processedContent = mainRendererReferences.markedInstance.parse(restoreBlocks(content));
-            } catch (e) {
-                processedContent = `<pre>${escapedContent}</pre>`;
-            }
-        } else {
-            processedContent = `<pre>${escapedContent}</pre>`;
-        }
-
-        html += `<div class="vcp-thought-chain-body">${processedContent}</div>`;
-        html += `</div>`; // End of vcp-thought-chain-collapsible-content
-        html += `</div>`; // End of vcp-thought-chain-bubble
-
-        return `\n\n${html}\n\n`;
-    };
-
-    processed = processed.replace(THOUGHT_CHAIN_REGEX, (match, theme, rawContent) => {
-        return renderThoughtChain(theme, rawContent);
-    });
-
-    // Process Conventional Thought Chains (<think>...</think>)
-    processed = processed.replace(CONVENTIONAL_THOUGHT_REGEX, (match, rawContent) => {
-        return renderThoughtChain("思维链", rawContent);
-    });
-
-    // Desktop Push blocks 已在 preprocessFullContent 中于代码块保护之后统一处理
-    // 这里不再重复处理，避免与代码块内的语法冲突
-
-    // Process Role Dividers
+    // Process Role Dividers before restoring thought chains.
+    // 思维链内部的角色分隔标记必须保持普通 Markdown 文本，不能生成外层角色分隔组件。
     processed = processed.replace(ROLE_DIVIDER_REGEX, (match, isEnd, role) => {
         const isEndMarker = !!isEnd;
         const roleLower = role.toLowerCase();
@@ -1300,6 +1256,72 @@ function transformSpecialBlocks(text, codeBlockMap) {
 
         return `\n\n<div class="vcp-role-divider role-${roleLower} type-${isEndMarker ? 'end' : 'start'}" data-vcp-block-type="role-divider" data-vcp-preserve-children="true"><span class="divider-text">${label} 分界之${actionText}</span></div>\n\n`;
     });
+
+    // 所有外层特殊协议转换完成后才恢复思维链。
+    // 从这里开始只执行思维链专用 Markdown/LaTeX 渲染，不再运行任何 VCP 特殊规则。
+    if (thoughtChainMap && thoughtChainMap.size > 0) {
+        for (const [placeholder, original] of thoughtChainMap.entries()) {
+            processed = processed.split(placeholder).join(original);
+        }
+    }
+
+    // Process VCP Thought Chains
+    const renderThoughtChainMarkdown = (rawText) => {
+        const restoredText = restoreBlocks(rawText || '');
+
+        if (!mainRendererReferences.markedInstance) {
+            return `<pre>${escapeHtml(restoredText)}</pre>`;
+        }
+
+        try {
+            // 思维链是隔离渲染域：只解释 Markdown、普通代码围栏与 LaTeX。
+            // 先保护公式，再封印代码围栏外的原始 HTML；工具、Mermaid、Flowlock、
+            // 桌面推送、日记等 VCP 特殊协议均不会再次进入完整内容流水线。
+            const { text: latexProtectedText, map: latexMap } = protectLatexBlocks(restoredText);
+            const sealedMarkdown = escapeRawHtmlOutsideCodeFences(latexProtectedText);
+            const renderedMarkdown = mainRendererReferences.markedInstance.parse(
+                sealedMarkdown,
+                TOOL_RESULT_SAFE_MARKDOWN_OPTIONS
+            );
+            return restoreLatexBlocks(renderedMarkdown, latexMap);
+        } catch (e) {
+            return `<pre>${escapeHtml(restoredText)}</pre>`;
+        }
+    };
+
+    const renderThoughtChain = (theme, rawContent) => {
+        const displayTheme = theme ? theme.trim() : "元思考链";
+        const content = rawContent.trim();
+
+        let html = `<div class="vcp-thought-chain-bubble collapsible" data-vcp-block-type="thought-chain" data-vcp-preserve-children="true">`;
+        html += `<div class="vcp-thought-chain-header">`;
+        html += `<span class="vcp-thought-chain-icon">🧠</span>`;
+        html += `<span class="vcp-thought-chain-label">${escapeHtml(displayTheme)}</span>`;
+        html += `<span class="vcp-result-toggle-icon"></span>`;
+        html += `</div>`;
+
+        html += `<div class="vcp-thought-chain-collapsible-content">`;
+
+        const processedContent = renderThoughtChainMarkdown(content);
+        html += `<div class="vcp-thought-chain-body">${processedContent}</div>`;
+        html += `</div>`; // End of vcp-thought-chain-collapsible-content
+        html += `</div>`; // End of vcp-thought-chain-bubble
+
+        return `\n\n${html}\n\n`;
+    };
+
+    processed = processed.replace(THOUGHT_CHAIN_REGEX, (match, theme, rawContent) => {
+        return renderThoughtChain(theme, rawContent);
+    });
+
+    // Process Conventional Thought Chains (<think>...</think> / <thinking>...</thinking>)
+    // 同时兼容单行与多行格式；正则反向引用确保开始、结束标签一致。
+    processed = processed.replace(CONVENTIONAL_THOUGHT_REGEX, (match, tagName, rawContent) => {
+        return renderThoughtChain("思维链", rawContent);
+    });
+
+    // Desktop Push blocks 已在 preprocessFullContent 中于代码块保护之后统一处理
+    // 这里不再重复处理，避免与代码块内的语法冲突
 
     return processed;
 }
@@ -1832,6 +1854,81 @@ function findUnclosedStreamCodeFence(text) {
     };
 }
 
+function findUnclosedStreamThoughtChain(text) {
+    if (
+        typeof text !== 'string' ||
+        (!text.includes('[--- VCP元思考链') && !/<think(?:ing)?>/i.test(text))
+    ) {
+        return null;
+    }
+
+    const normalizedText = text.replace(/\r\n?/g, '\n');
+    const lines = normalizedText.split('\n');
+    let activeFence = null;
+    let activeThought = null;
+    let offset = 0;
+
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const line = lines[lineIndex];
+        const fenceMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+
+        if (fenceMatch) {
+            const marker = fenceMatch[1];
+            const trailingText = fenceMatch[2] || '';
+
+            if (!activeFence) {
+                activeFence = { char: marker[0], length: marker.length };
+            } else if (
+                marker[0] === activeFence.char &&
+                marker.length >= activeFence.length &&
+                trailingText.trim() === ''
+            ) {
+                activeFence = null;
+            }
+        } else if (!activeFence) {
+            if (!activeThought) {
+                const customStart = line.match(
+                    /^[ \t]*\[--- VCP元思考链(?::\s*"[^"]*")?\s*---\][ \t]*$/
+                );
+                const conventionalStart = line.match(
+                    /^[ \t]*<(think(?:ing)?)>[ \t]*(.*)$/i
+                );
+
+                if (customStart) {
+                    activeThought = { startIndex: offset, type: 'custom' };
+                } else if (conventionalStart) {
+                    const type = conventionalStart[1].toLowerCase();
+                    const trailingContent = conventionalStart[2] || '';
+                    const sameLineEndRegex = new RegExp(`<\\/${type}>[ \\t]*$`, 'i');
+                    if (!sameLineEndRegex.test(trailingContent)) {
+                        activeThought = { startIndex: offset, type };
+                    }
+                }
+            } else {
+                const isEnd = activeThought.type === 'custom'
+                    ? /^[ \t]*\[--- 元思考链结束 ---\][ \t]*$/.test(line)
+                    : new RegExp(`<\\/${activeThought.type}>[ \\t]*$`, 'i').test(line);
+
+                if (isEnd) {
+                    activeThought = null;
+                }
+            }
+        }
+
+        offset += line.length;
+        if (lineIndex < lines.length - 1) offset += 1;
+    }
+
+    if (!activeThought) return null;
+
+    return {
+        prefix: normalizedText.slice(0, activeThought.startIndex),
+        thought: normalizedText.slice(activeThought.startIndex),
+        startIndex: activeThought.startIndex,
+        type: activeThought.type
+    };
+}
+
 function findUnclosedStreamToolRequest(text) {
     if (typeof text !== 'string' || !text.includes(TOOL_START_MARKER)) {
         return null;
@@ -1852,7 +1949,8 @@ function findUnclosedStreamToolRequest(text) {
         if (endIndex === -1) {
             return {
                 prefix: text.slice(0, startIndex),
-                request: text.slice(startIndex)
+                request: text.slice(startIndex),
+                startIndex
             };
         }
 
@@ -1868,14 +1966,24 @@ function parseStreamTailMarkdown(text) {
 
     const processedText = preprocessStreamTailContent(text);
 
-    // 工具请求尚未闭合时，完整管线还不能把它转换为安全的工具气泡。
-    // 这里必须先把整个请求尾部作为纯文本封印，禁止参数中的 HTML 在任一流式帧成为真实 DOM。
+    // 未闭合工具请求和思维链都属于流式隔离域。按源码中更早出现的块决定封印边界，
+    // 因此思维链内部出现 TOOL_REQUEST 文本时不会被误当作外层工具调用，反之亦然。
     const unclosedToolRequest = findUnclosedStreamToolRequest(processedText);
-    if (unclosedToolRequest) {
-        const prefixHtml = unclosedToolRequest.prefix
-            ? markedInstance.parse(unclosedToolRequest.prefix)
+    const unclosedThoughtChain = findUnclosedStreamThoughtChain(processedText);
+    const sealedBlock = [unclosedToolRequest, unclosedThoughtChain]
+        .filter(Boolean)
+        .sort((a, b) => a.startIndex - b.startIndex)[0];
+
+    if (sealedBlock) {
+        const prefixHtml = sealedBlock.prefix
+            ? markedInstance.parse(sealedBlock.prefix)
             : '';
-        return `${prefixHtml}<pre class="vcp-stream-tool-request-sealed">${escapeHtml(unclosedToolRequest.request)}</pre>`;
+        const isThoughtChain = sealedBlock === unclosedThoughtChain;
+        const sealedText = isThoughtChain ? sealedBlock.thought : sealedBlock.request;
+        const sealClass = isThoughtChain
+            ? 'vcp-stream-thought-chain-sealed'
+            : 'vcp-stream-tool-request-sealed';
+        return `${prefixHtml}<pre class="${sealClass}"><code>${escapeHtml(sealedText)}</code></pre>`;
     }
 
     const unclosedFence = findUnclosedStreamCodeFence(processedText);
@@ -2299,7 +2407,8 @@ function initializeMessageRenderer(refs) {
         deIndentHtml,
         deIndentToolRequestBlocks: contentProcessor.deIndentToolRequestBlocks,
         applyContentProcessors: contentProcessor.applyContentProcessors,
-        transformSpecialBlocks,
+        transformSpecialBlocks: (text, codeBlockMap, thoughtChainMap) =>
+            transformSpecialBlocks(text, codeBlockMap, thoughtChainMap),
         ensureHtmlFenced,
         transformFlowlockBlocks: (text) => {
             if (!window.flowlockProtocol || typeof window.flowlockProtocol.transformForRender !== 'function') {
