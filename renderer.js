@@ -536,6 +536,33 @@ import { setupEventListeners } from './modules/event-listeners.js';
         }
     });
 
+    // Agent 主动联络：告知用户有新的主动消息 → 刷新会话列表 + 若该 agent 已选中则切到主动 topic
+    if (chatAPI.onProactiveNotification) {
+        chatAPI.onProactiveNotification(({ agentId, topicId, agentName, scenario }) => {
+            console.log(`[Renderer] Proactive notification from ${agentName} (scenario=${scenario})`);
+            // 刷新侧边列表，让新 topic/未读态可见
+            if (window.topicListManager && typeof window.topicListManager.loadTopicList === 'function') {
+                window.topicListManager.loadTopicList();
+            }
+            // item 列表重载 + 未读徽章（主动消息落到专用 topic 后打标）
+            if (window.itemListManager) {
+                if (typeof window.itemListManager.loadItems === 'function') window.itemListManager.loadItems();
+                if (typeof window.itemListManager.updateUnreadBadges === 'function') window.itemListManager.updateUnreadBadges();
+            }
+            // 若该 agent 正是当前选中项，则自动切到主动联络 topic（轻轻打断看得到）
+            if (window.chatManager && currentSelectedItem &&
+                currentSelectedItem.id === agentId && currentSelectedItem.type === 'agent') {
+                window.chatManager.selectTopic(topicId).catch(err => {
+                    console.error('[Renderer] selectTopic to proactive topic failed:', err);
+                });
+            }
+            // toast 提醒（复用现有通知渲染的轻量提示）
+            if (uiHelperFunctions && typeof uiHelperFunctions.showToastNotification === 'function') {
+                uiHelperFunctions.showToastNotification(`${agentName} 悄悄戳了戳你 ♪`, 'info');
+            }
+        });
+    }
+
     // Unified listener for all VCP stream events (agent and group)
     chatAPI.onVCPStreamEvent(async (eventData) => {
         if (!window.messageRenderer) {

@@ -529,6 +529,22 @@ window.chatManager = (() => {
             await loadChatHistory(currentSelectedItem.id, currentSelectedItem.type, topicId);
             localStorage.setItem(`lastActiveTopic_${currentSelectedItem.id}_${currentSelectedItem.type}`, topicId);
             _saveLastOpenState();
+
+            // 打开话题 → 自动清除未读标记（含主动联络 topic 的 unread:true）。
+            // 覆盖用户点击打开与 proactive 自动跳转两条路径；topic 无 unread 时跳过避免多余 IPC。
+            try {
+                const topicCfg = (currentSelectedItem.config || currentSelectedItem)?.topics;
+                const openedTopic = Array.isArray(topicCfg) ? topicCfg.find(t => t && t.id === topicId) : null;
+                if (openedTopic && openedTopic.unread === true && electronAPI && typeof electronAPI.setTopicUnread === 'function') {
+                    await electronAPI.setTopicUnread(currentSelectedItem.id, topicId, false);
+                    if (openedTopic) openedTopic.unread = false;
+                    if (itemListManager && typeof itemListManager.refreshUnreadCounts === 'function') {
+                        itemListManager.refreshUnreadCounts();
+                    }
+                }
+            } catch (clearUnreadErr) {
+                console.warn('[ChatManager] Failed to auto-clear unread for topic:', clearUnreadErr);
+            }
         } catch (error) {
             console.error('[ChatManager] Failed to select topic:', error);
             if (messageRenderer) {

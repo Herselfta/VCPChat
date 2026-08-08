@@ -21,6 +21,7 @@ const { spawn } = require('child_process'); // For executing local python
 const { Worker } = require('worker_threads');
 const fileManager = require('./modules/fileManager'); // Import the new file manager
 const groupChat = require('./Groupmodules/groupchat'); // Import the group chat module
+const proactiveInbox = require('./modules/proactiveInbox'); // Agent 主动联络收件箱（顶层声明：onmessage/handleProactiveMessage 是顶层函数，需在此作用域）
 const windowHandlers = require('./modules/ipc/windowHandlers'); // Import window IPC handlers
 const settingsHandlers = require('./modules/ipc/settingsHandlers'); // Import settings IPC handlers
 const fileDialogHandlers = require('./modules/ipc/fileDialogHandlers'); // Import file dialog handlers
@@ -1072,6 +1073,32 @@ if (!gotTheLock) {
             }
             return { success: false, error: 'File watcher not initialized.' };
         });
+
+        // Agent 主动联络收件箱：初始化（agentConfigManager + mainWindow 就绪后调用）。
+        // 收到 agent_proactive_message 后在主进程注入专用 topic；渲染进程收到
+        // proactive-notification 事件跳转/标记未读 + 刷新历史。
+        try {
+            proactiveInbox.init({
+                agentDir: AGENT_DIR,
+                userDataDir: USER_DATA_DIR,
+                agentConfigManager,
+                notify: ({ agentId, topicId, messageId, agentName, scenario }) => {
+                    require('fs').appendFileSync(path.join(APP_DATA_ROOT_IN_PROJECT, 'proactive-diag.log'),
+                        `[${new Date().toISOString()}] notify → agentId=${agentId} topicId=${topicId} scenario=${scenario}\n`);
+                    if (!mainWindow || mainWindow.isDestroyed()) return;
+                    mainWindow.webContents.send('proactive-notification', {
+                        agentId, topicId, messageId, agentName, scenario,
+                    });
+                },
+            });
+            require('fs').appendFileSync(path.join(APP_DATA_ROOT_IN_PROJECT, 'proactive-diag.log'),
+                `[${new Date().toISOString()}] [ProactiveInbox] initialized OK (agentDir=${AGENT_DIR})\n`);
+            console.log('[ProactiveInbox] initialized.');
+        } catch (initErr) {
+            require('fs').appendFileSync(path.join(APP_DATA_ROOT_IN_PROJECT, 'proactive-diag.log'),
+                `[${new Date().toISOString()}] [ProactiveInbox] init FAILED: ${initErr.message}\n${initErr.stack||''}\n`);
+            console.error('[ProactiveInbox] init failed (non-fatal):', initErr.message);
+        }
         ipcMain.handle('chat-data-service-status', async () => {
             if (!chatDataService) {
                 return { status: 'disabled', searchAvailable: false, degraded: true };
@@ -1330,6 +1357,23 @@ if (!gotTheLock) {
 
     // VCP Server Communication is now handled in modules/ipc/chatHandlers.js
 
+    // Agent 主动联络消息处理：解析 agent → 找/建专用 topic → 注入历史 → 通知渲染。
+    async function handleProactiveMessage(payload) {
+        const { agentName, message, scenario, runId } = payload || {};
+        if (!agentName || typeof message !== 'string' || !message.trim()) {
+            throw new Error(`Invalid proactive message payload (agentName=${agentName})`);
+        }
+        const agentId = await proactiveInbox.resolveAgentIdByName(agentName);
+        if (!agentId) {
+            throw new Error(`Unknown VCPChat agent for proactive message: ${agentName}`);
+        }
+        const { topicId } = await proactiveInbox.ensureProactiveTopic(agentId, agentName);
+        if (!topicId) throw new Error('Failed to ensure proactive topic.');
+        const result = await proactiveInbox.appendProactiveMessage(agentId, topicId, agentName, message, { scenario, runId });
+        if (!result || result.error) throw new Error(result && result.error || 'appendProactiveMessage failed');
+        console.log(`[ProactiveInbox] Injected proactive message into ${agentName} topic ${topicId}: ${message.substring(0, 80)}`);
+    }
+
     // VCPLog WebSocket Connection
     function connectVcpLog(wsUrl, wsKey) {
         const WebSocket = require('ws'); // Lazy load
@@ -1371,6 +1415,22 @@ if (!gotTheLock) {
             console.log('VCPLog 收到消息:', event.data);
             try {
                 const data = JSON.parse(event.data.toString());
+                // Agent 主动联络：注入专用 topic 而不走通用通知管线
+                if (data && data.type === 'agent_proactive_message' && data.data && data.data.agentName && data.data.message) {
+                    require('fs').appendFileSync(path.join(APP_DATA_ROOT_IN_PROJECT, 'proactive-diag.log'),
+                        `[${new Date().toISOString()}] onmessage 命中 agent_proactive_message，调 handleProactiveMessage\n`);
+                    handleProactiveMessage(data.data).then(() => {
+                        require('fs').appendFileSync(path.join(APP_DATA_ROOT_IN_PROJECT, 'proactive-diag.log'),
+                            `[${new Date().toISOString()}] handleProactiveMessage 成功\n`);
+                    }).catch(err => {
+                        require('fs').appendFileSync(path.join(APP_DATA_ROOT_IN_PROJECT, 'proactive-diag.log'),
+                            `[${new Date().toISOString()}] handleProactiveMessage 失败: ${err.message}\n${err.stack||''}\n`);
+                        console.error('[ProactiveInbox] handleProactiveMessage failed:', err);
+                        // 失败时仍转发为普通通知，避免消息丢失
+                        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('vcp-log-message', data);
+                    });
+                    return;
+                }
                 if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('vcp-log-message', data);
             } catch (e) {
                 console.error('VCPLog 解析消息失败:', e);

@@ -234,6 +234,7 @@ function createCatalog(ops) {
         disconnectVCPLog: command(() => ops.send('disconnect-vcplog')),
         onVCPLogMessage: subscription(ops.subscribe('vcp-log-message', (_event, value) => value)),
         onVCPLogStatus: subscription(ops.subscribe('vcp-log-status', (_event, value) => value)),
+        onProactiveNotification: subscription(ops.subscribe('proactive-notification', (_event, value) => value)),
         sendVCPLogMessage: command((data) => ops.send('send-vcplog-message', data)),
         toggleSelectionListener: command((enable) => ops.send('toggle-selection-listener', enable)),
         getSelectionListenerStatus: query(() => ops.invoke('get-selection-listener-status')),
